@@ -1,5 +1,6 @@
 # Cloudflare Pages build configuration (read automatically by Pages on every deploy).
-# This pins the correct output directory so the dashboard preset cannot break the build.
+# "name" MUST exactly match your Pages project name in the Cloudflare dashboard.
+name = "vp-n-server"
 pages_build_output_dir = "dist"
 compatibility_date = "2025-01-01"
 

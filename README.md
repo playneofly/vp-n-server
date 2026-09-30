@@ -17,13 +17,15 @@
 
 | تنظیم | مقدار |
 |---|---|
-| Framework preset | `Vite` |
+| Framework preset | `None` (گزینه‌ی Vite در لیست نیست — None را انتخاب کن) |
 | Build command | `npm run build` |
 | Build output directory | `dist` |
 
 روی **Save and Deploy** بزن. پوشه‌ی `functions` خودکار شناسایی می‌شود — هم سایت، هم سرور VLESS با هم بالا می‌آیند. ✅
 
 > ⚠️ اگر خطای `Output directory ".vitepress/dist" not found` گرفتی یعنی Framework اشتباه (VitePress) تشخیص داده شده. فایل `wrangler.toml` ریشه این را خودکار اصلاح می‌کند؛ فقط push کن و **Retry deployment** بزن. یا دستی: **Settings → Builds & deployments** → خروجی را `dist` کن.
+
+> 📌 در فایل `wrangler.toml` مقدار `name` باید دقیقا با اسم پروژه‌ی Pages در داشبورد کلادفلر یکی باشد (مثلا `vp-n-server`). اگر اسم پروژه‌ات فرق دارد، همان خط را ویرایش کن.
 
 ### ۳) تنظیم UUID (خیلی مهم)
 داخل پروژه‌ی Pages: **Settings → Environment variables → Production** و این متغیر را بساز:

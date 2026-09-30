@@ -71,7 +71,7 @@ git push -u origin main`}
               </p>
               <SettingsTable
                 rows={[
-                  ["Framework preset", "Vite"],
+                  ["Framework preset", "None"],
                   ["Build command", "npm run build"],
                   ["Build output directory", "dist"],
                 ]}
@@ -82,8 +82,9 @@ git push -u origin main`}
                 خودکار شناسایی و موتور پروکسی فعال می‌شود — کار دیگری لازم نیست.
               </p>
               <div className="rounded-xl border border-brand-500/25 bg-brand-500/8 p-3 text-[11.5px] leading-6 text-brand-300/90">
-                دقت کن حتما <b>Vite</b> انتخاب شده باشد، نه VitePress! اگر قبلا با تنظیمات اشتباه دپلوی
-                کردی: برو به <b>Settings ← Builds & deployments</b>، روی ✎ بزن، خروجی را{" "}
+                در لیست فریم‌ورک‌ها گزینه‌ی «Vite» وجود ندارد — حتما <b>None</b> را انتخاب کن
+                (VitePress مخصوص ابزار دیگری است). اگر قبلا با تنظیمات اشتباه دپلوی کردی: برو به{" "}
+                <b>Settings ← Builds & deployments</b>، روی ✎ بزن، خروجی را{" "}
                 <span className="num font-bold">dist</span> کن و بعد از تب <b>Deployments</b> گزینه‌ی{" "}
                 <b>Retry deployment</b> را بزن.
               </div>
