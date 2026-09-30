@@ -81,6 +81,12 @@ git push -u origin main`}
                 <code className="num rounded bg-white/8 px-1.5 py-0.5 text-[11px] text-brand-300">functions</code>{" "}
                 خودکار شناسایی و موتور پروکسی فعال می‌شود — کار دیگری لازم نیست.
               </p>
+              <div className="rounded-xl border border-brand-500/25 bg-brand-500/8 p-3 text-[11.5px] leading-6 text-brand-300/90">
+                دقت کن حتما <b>Vite</b> انتخاب شده باشد، نه VitePress! اگر قبلا با تنظیمات اشتباه دپلوی
+                کردی: برو به <b>Settings ← Builds & deployments</b>، روی ✎ بزن، خروجی را{" "}
+                <span className="num font-bold">dist</span> کن و بعد از تب <b>Deployments</b> گزینه‌ی{" "}
+                <b>Retry deployment</b> را بزن.
+              </div>
             </>
           }
         />
@@ -149,8 +155,8 @@ git push -u origin main`}
           </div>
           <div className="mt-5 grid gap-4 md:grid-cols-2">
             <div className="text-[13px] leading-7 text-white/55">
-              فایل <code className="num rounded bg-white/8 px-1.5 py-0.5 text-[11px] text-brand-300">worker.js</code>{" "}
-              در ریشه‌ی پروژه، نسخه‌ی مستقلِ آماده است. در داشبورد کلادفلر برو به{" "}
+              فایل <code className="num rounded bg-white/8 px-1.5 py-0.5 text-[11px] text-brand-300">worker/worker.js</code>{" "}
+              نسخه‌ی مستقلِ آماده است. در داشبورد کلادفلر برو به{" "}
               <b className="text-white/80">Workers</b> ← <b className="text-white/80">Create Worker</b>، محتوای
               فایل را جای‌گذاری کن، Deploy بزن و بعد متغیر <span className="num font-bold text-white/80">UUID</span>{" "}
               را در <b className="text-white/80">Settings ← Variables</b> ست کن. آدرس ورکر
@@ -159,9 +165,9 @@ git push -u origin main`}
             <div>
               <CodeBlock
                 code={`# یا با ترمینال (نیازمند Node.js 18+):
-npm i -g wrangler
-wrangler login
-wrangler deploy worker.js --name cf-forge --compatibility-date 2025-01-01`}
+cd worker
+npx wrangler login
+npx wrangler deploy`}
               />
             </div>
           </div>

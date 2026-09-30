@@ -1,0 +1,11 @@
+# Standalone Worker configuration — only used for the alternative path:
+#   cd worker
+#   npx wrangler deploy
+name = "cf-forge"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+# Set your own key (also editable later in: Worker → Settings → Variables)
+# [vars]
+# UUID = "b3311f0d-72e4-4f9c-9a3d-5c6b7a8f9e0d"
+# PROXYIP = ""

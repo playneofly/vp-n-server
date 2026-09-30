@@ -1,10 +1,10 @@
-# Optional — only needed for the standalone Worker path:
-#   npx wrangler deploy
-name = "cf-forge"
-main = "worker.js"
+# Cloudflare Pages build configuration (read automatically by Pages on every deploy).
+# This pins the correct output directory so the dashboard preset cannot break the build.
+pages_build_output_dir = "dist"
 compatibility_date = "2025-01-01"
 
-# Set your own values (or use dashboard: Settings → Variables)
+# Optional environment variables (you can also set them in:
+# Pages project → Settings → Environment variables)
 # [vars]
 # UUID = "b3311f0d-72e4-4f9c-9a3d-5c6b7a8f9e0d"
 # PROXYIP = ""

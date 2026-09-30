@@ -23,6 +23,8 @@
 
 روی **Save and Deploy** بزن. پوشه‌ی `functions` خودکار شناسایی می‌شود — هم سایت، هم سرور VLESS با هم بالا می‌آیند. ✅
 
+> ⚠️ اگر خطای `Output directory ".vitepress/dist" not found` گرفتی یعنی Framework اشتباه (VitePress) تشخیص داده شده. فایل `wrangler.toml` ریشه این را خودکار اصلاح می‌کند؛ فقط push کن و **Retry deployment** بزن. یا دستی: **Settings → Builds & deployments** → خروجی را `dist` کن.
+
 ### ۳) تنظیم UUID (خیلی مهم)
 داخل پروژه‌ی Pages: **Settings → Environment variables → Production** و این متغیر را بساز:
 
@@ -50,12 +52,12 @@ https://your-project.pages.dev/sub/YOUR-UUID
 
 ## مسیر جایگزین: Worker جداگانه
 
-اگر نمی‌خواهی Pages داشته باشی، فایل `worker.js` آماده است:
+اگر نمی‌خواهی Pages داشته باشی، ورکر مستقل داخل پوشه‌ی `worker/` آماده است:
 
 ```bash
-npm i -g wrangler
-wrangler login
-wrangler deploy worker.js --name cf-forge --compatibility-date 2025-01-01
+cd worker
+npx wrangler login
+npx wrangler deploy
 ```
 
 بعد متغیر `UUID` را در **Settings → Variables** ورکر ست کن. آدرس ورکر (`name.workers.dev`) را در فرم سایت به‌عنوان دامنه وارد کن.
