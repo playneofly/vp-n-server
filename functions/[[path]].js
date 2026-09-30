@@ -71,12 +71,27 @@ export async function onRequest(context) {
     }
 
     const upgradeHeader = (request.headers.get("Upgrade") || "").toLowerCase();
-    if (upgradeHeader !== "websocket") {
-      // درخواست‌های عادی (غیر پروکسی) → هدایت به یک سایت بی‌خطر
+    if (upgradeHeader === "websocket") {
+      return await handleVlessWebSocket(request, env);
+    }
+
+    // --- درخواست‌های عادی (مرورگر) ---
+    if (url.pathname.startsWith("/vl/")) {
+      // کسی مسیر پروکسی را دستی در مرورگر باز کرده → هدایت به سایت بی‌خطر (استلث)
       return Response.redirect("https://www.speedtest.net", 302);
     }
 
-    return await handleVlessWebSocket(request, env);
+    // بقیه‌ی مسیرها (از جمله صفحه‌ی اصلی) → سایت اصلی از فایل‌های استاتیک
+    try {
+      if (env.ASSETS) {
+        const assetsResponse = await env.ASSETS.fetch(request);
+        if (assetsResponse && assetsResponse.status !== 404) {
+          return assetsResponse;
+        }
+      }
+    } catch (e) {}
+
+    return fallbackPage();
   } catch (err) {
     return new Response(String((err && err.message) || err), { status: 500 });
   }
@@ -486,4 +501,24 @@ function closeSocket(socket) {
   try {
     socket.close();
   } catch (e) {}
+}
+
+// اگر فایل‌های استاتیک در دسترس نبودند، یک صفحه‌ی راهنمای سبک نشان بده
+function fallbackPage() {
+  const html =
+    '<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8">' +
+    '<meta name="viewport" content="width=device-width,initial-scale=1"><title>CF Forge</title>' +
+    "<style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#050b0a;color:#e4e4e7;font-family:Tahoma,sans-serif}" +
+    ".card{max-width:520px;margin:20px;padding:32px;border:1px solid rgba(52,211,153,.25);border-radius:18px;background:rgba(255,255,255,.03)}" +
+    "h1{color:#34d399;font-size:21px;margin-top:0}code{direction:ltr;display:inline-block;background:rgba(52,211,153,.08);border:1px solid rgba(52,211,153,.2);color:#6ee7b7;border-radius:8px;padding:2px 8px;font-size:12px}" +
+    "p,li{line-height:2.1;font-size:14px;color:#a1a1aa}ol{padding-right:18px}</style></head><body>" +
+    '<div class="card"><h1>CF Forge — موتور VLESS فعال است</h1>' +
+    "<p>سرور پروکسی درست کار می‌کند، اما فایل‌های استاتیک سایت پیدا نشدند. برای نمایش رابط کاربری:</p>" +
+    "<ol><li>در داشبورد Pages به Settings برو</li><li>Build command: <code>npm run build</code></li>" +
+    "<li>Output directory: <code>dist</code></li><li>از تب Deployments گزینه‌ی Retry deployment را بزن</li></ol>" +
+    "<p>کانفیگ‌ها و لینک اشتراک <code>/sub/YOUR-UUID</code> همین حالا هم فعال‌اند.</p></div></body></html>";
+  return new Response(html, {
+    status: 200,
+    headers: { "content-type": "text/html; charset=utf-8" },
+  });
 }
