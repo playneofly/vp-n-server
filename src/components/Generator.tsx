@@ -15,6 +15,7 @@ import {
   Lock,
   LockOpen,
   QrCode,
+  Radar,
   Shuffle,
   Sparkles,
   Unlock,
@@ -23,6 +24,7 @@ import {
 } from "lucide-react";
 import Reveal from "./Reveal";
 import { toast } from "../lib/toast";
+import { isIPv4, msTone, scanCandidates, scanPorts, type ScanItem } from "../lib/scanner";
 import {
   DEFAULT_TROJAN_PASSWORD,
   DEFAULT_UUID,
@@ -39,7 +41,7 @@ import {
   type GenConfig,
   type ProtocolMode,
 } from "../lib/vless";
-import { buildPool, CLEAN_DOMAINS, CLEAN_IPS, type IpMode } from "../lib/cleanIPs";
+import { buildPool, CLEAN_DOMAINS, CLEAN_IPS, PINGABLE_IPS, type IpMode } from "../lib/cleanIPs";
 
 const LS_KEY = "cf-forge.settings.v1";
 const QUICK_COUNTS = [20, 50, 100, 200, 500];
@@ -91,6 +93,11 @@ export default function Generator() {
   const [results, setResults] = useState<GenConfig[]>([]);
   const [qrFor, setQrFor] = useState<GenConfig | null>(null);
   const [justMade, setJustMade] = useState(false);
+  const [health, setHealth] = useState<"idle" | "checking" | "ok" | "mismatch" | "down">("idle");
+  const [scanning, setScanning] = useState(false);
+  const [scanProgress, setScanProgress] = useState({ done: 0, total: 0 });
+  const [scanItems, setScanItems] = useState<ScanItem[]>([]);
+  const [useVerified, setUseVerified] = useState(false);
 
   useEffect(() => {
     try {
@@ -103,10 +110,79 @@ export default function Generator() {
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) =>
     setS((prev) => ({ ...prev, [key]: value }));
 
-  const pool = useMemo(() => buildPool(s.ipMode, s.customIPs), [s.ipMode, s.customIPs]);
   const uuidOk = isValidUUID(s.uuid);
   const domainOk = sanitizeDomain(s.domain).length > 3 && sanitizeDomain(s.domain).includes(".");
   const portCount = s.tlsPorts.length + s.plainPorts.length;
+
+  const basePool = useMemo(() => buildPool(s.ipMode, s.customIPs), [s.ipMode, s.customIPs]);
+  // addresses that survived the live scan from this very network
+  const verifiedAddrs = useMemo(() => {
+    const out: string[] = [];
+    for (const item of scanItems) {
+      if (item.ms === null) continue;
+      out.push(item.host, ...item.ips);
+    }
+    return [...new Set(out)];
+  }, [scanItems]);
+  const hasVerified = useVerified && verifiedAddrs.length > 0;
+  const pool = hasVerified ? verifiedAddrs : basePool;
+
+  // ── live server health + key match check ──
+  useEffect(() => {
+    if (!domainOk || sanitizeDomain(s.domain).includes("localhost")) {
+      setHealth("idle");
+      return;
+    }
+    const ctrl = new AbortController();
+    setHealth("checking");
+    const t = setTimeout(async () => {
+      try {
+        const u = new URL(`https://${sanitizeDomain(s.domain)}/health`);
+        u.searchParams.set("uuid", s.uuid.trim());
+        if (s.trojanPassword.trim()) u.searchParams.set("tpass", s.trojanPassword.trim());
+        const r = await fetch(u.toString(), { signal: ctrl.signal, cache: "no-store" });
+        if (!r.ok) throw new Error();
+        const j = await r.json();
+        const badUuid = j.uuidMatch === false && s.protocolMode !== "trojan";
+        const badTrojan = j.trojanMatch === false && s.protocolMode !== "vless";
+        setHealth(badUuid || badTrojan ? "mismatch" : "ok");
+      } catch {
+        setHealth("down");
+      }
+    }, 600);
+    return () => {
+      clearTimeout(t);
+      ctrl.abort();
+    };
+  }, [s.domain, s.uuid, s.trojanPassword, s.protocolMode, domainOk]);
+
+  // ── live scan from the user's network ──
+  const runScan = async () => {
+    if (scanning) return;
+    setScanning(true);
+    setScanItems([]);
+    setUseVerified(false);
+    const customDomains = s.customIPs
+      .split(/[\s,،;\n]+/)
+      .map((x) => x.trim())
+      .filter((x) => x && !isIPv4(x));
+    const hosts = [...new Set([...CLEAN_DOMAINS, ...PINGABLE_IPS, ...customDomains])].slice(0, 22);
+    setScanProgress({ done: 0, total: hosts.length });
+    const items = await scanCandidates(hosts, (done, total) => setScanProgress({ done, total }));
+    setScanItems(items);
+    const alive = items.filter((i) => i.ms !== null);
+    if (alive.length === 0) {
+      toast("هیچ مقصدی روی شبکه‌ات پاسخ نداد — اتصال اینترنت را چک کن", "err");
+      setScanning(false);
+      return;
+    }
+    const portResults = await scanPorts(alive[0]!.host, TLS_PORTS);
+    const openPorts = portResults.filter((p) => p.ok).map((p) => p.port);
+    if (openPorts.length > 0) setS((prev) => ({ ...prev, tlsPorts: openPorts }));
+    setUseVerified(true);
+    setScanning(false);
+    toast(`${faNum(alive.length)} مقصد سالم یافت شد و پورت‌های باز اعمال شدند`);
+  };
 
   const generate = () => {
     if (!domainOk) return toast("اول دامنه‌ی معتبر سایت/ورکرت را وارد کن", "err");
@@ -199,6 +275,38 @@ export default function Generator() {
                 آدرس Pages یا Worker خودت — بعد از دپلوی روی کلادفلر فعال می‌شود.
                 {s.domain === window.location.host && " (از آدرس فعلی سایت پر شد)"}
               </p>
+
+              {health !== "idle" && (
+                <div
+                  className={`mt-2.5 flex items-center gap-2 rounded-xl px-3 py-2.5 text-[11px] font-bold ${
+                    health === "ok"
+                      ? "border border-emerald-400/25 bg-emerald-400/8 text-emerald-300"
+                      : health === "checking"
+                        ? "border border-sky-400/25 bg-sky-400/8 text-sky-300"
+                        : health === "mismatch"
+                          ? "border border-red-400/30 bg-red-400/10 text-red-300"
+                          : "border border-amber-400/30 bg-amber-400/10 text-amber-300"
+                  }`}
+                >
+                  <span
+                    className={`h-2 w-2 shrink-0 rounded-full ${
+                      health === "ok"
+                        ? "bg-emerald-400"
+                        : health === "checking"
+                          ? "animate-pulse bg-sky-400"
+                          : health === "mismatch"
+                            ? "bg-red-400"
+                            : "animate-pulse bg-amber-400"
+                    }`}
+                  />
+                  {health === "ok" && "موتور پروکسی آنلاین است — کلیدها با سرور تطبیق دارند"}
+                  {health === "checking" && "در حال بررسی اتصال به موتور پروکسی…"}
+                  {health === "mismatch" &&
+                    "سرور فعال است ولی کلید (UUID یا رمز Trojan) با متغیرهای کلادفلر یکی نیست — تنظیمات را چک کن و Redeploy بزن"}
+                  {health === "down" &&
+                    "موتور پروکسی روی این دامنه هنوز فعال نیست — اول دپلوی کن یا نسخه‌ی جدید functions را push کن"}
+                </div>
+              )}
 
               <div className="mt-6">
                 <StepTitle n="۲" icon={<KeyRound className="h-4.5 w-4.5" />} title="کلید UUID" small />
@@ -369,8 +477,12 @@ export default function Generator() {
                     {s.ipMode === "domain" && `${faNum(CLEAN_DOMAINS.length)} دامنه‌ی تمیز داخلی`}
                     {s.ipMode === "custom" && "فقط لیست خودت استفاده می‌شود"}
                   </span>
-                  <span className="num rounded-full bg-white/5 px-2 py-0.5 text-[10px] font-bold text-brand-300">
-                    pool: {pool.length}
+                  <span
+                    className={`num rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                      hasVerified ? "bg-emerald-400/15 text-emerald-300" : "bg-white/5 text-brand-300"
+                    }`}
+                  >
+                    {hasVerified ? `✓ verified: ${pool.length}` : `pool: ${pool.length}`}
                   </span>
                 </div>
                 <textarea
@@ -382,6 +494,75 @@ export default function Generator() {
                   placeholder={"آی‌پی‌های تمیز خودت را اینجا بگذار (اختیاری)\n1.1.1.1, 188.114.96.7, ..."}
                   className="num glass-soft mt-3 w-full resize-none rounded-2xl p-3.5 text-xs leading-6 text-white/85 outline-none placeholder:text-white/25 focus:border-brand-500/40"
                 />
+              </div>
+
+              {/* ── live network scan ── */}
+              <div className="mt-5 rounded-2xl border border-emerald-400/20 bg-emerald-400/5 p-4">
+                <button
+                  onClick={runScan}
+                  disabled={scanning}
+                  className={`flex h-12 w-full items-center justify-center gap-2.5 rounded-xl text-sm font-extrabold transition ${
+                    scanning
+                      ? "glass-soft cursor-wait text-white/60"
+                      : "bg-gradient-to-l from-emerald-500 to-emerald-600 text-night-900 shadow-[0_10px_30px_-10px_rgba(52,211,153,.6)] hover:brightness-110 active:scale-[.99]"
+                  }`}
+                >
+                  <Radar className={`h-5 w-5 ${scanning ? "animate-spin" : ""}`} />
+                  {scanning
+                    ? `در حال اسکن… ${faNum(scanProgress.done)}/${faNum(scanProgress.total)}`
+                    : "اسکن زنده از شبکه‌ی خودت"}
+                </button>
+                <p className="mt-2 text-center text-[10.5px] leading-5 text-emerald-200/50">
+                  مقصدها و پورت‌ها همین‌جا از روی اینترنت خودت تست می‌شوند و کانفیگ‌ها فقط از مسیرهای سالم ساخته می‌شوند
+                </p>
+
+                {scanItems.length > 0 && !scanning && (
+                  <div className="mt-3">
+                    <div className="mb-2 flex items-center justify-between">
+                      <span className="text-[11px] font-bold text-white/50">
+                        نتیجه‌ی اسکن ({faNum(scanItems.filter((i) => i.ms !== null).length)} سالم از{" "}
+                        {faNum(scanItems.length)})
+                      </span>
+                      <button
+                        data-on={hasVerified}
+                        onClick={() => setUseVerified((v) => !v)}
+                        disabled={verifiedAddrs.length === 0}
+                        className="chip glass-soft rounded-lg px-2.5 py-1.5 text-[10px] font-bold text-white/60 disabled:opacity-40"
+                      >
+                        {hasVerified ? "✓ فقط مقصدهای سالم" : "استفاده از مقصدهای سالم"}
+                      </button>
+                    </div>
+                    <div className="flex max-h-36 flex-wrap gap-1.5 overflow-y-auto" dir="ltr">
+                      {scanItems.map((item) => {
+                        const tone = msTone(item.ms);
+                        return (
+                          <span
+                            key={item.host}
+                            className={`num flex items-center gap-1.5 rounded-lg border px-2 py-1 text-[10px] font-bold ${
+                              tone === "good"
+                                ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300"
+                                : tone === "mid"
+                                  ? "border-amber-400/30 bg-amber-400/10 text-amber-300"
+                                  : "border-white/8 bg-white/4 text-white/25 line-through"
+                            }`}
+                          >
+                            <span className="max-w-28 truncate">{item.host}</span>
+                            {item.ms !== null ? (
+                              <span className="opacity-80">{item.ms}ms</span>
+                            ) : (
+                              <X className="h-3 w-3" />
+                            )}
+                            {item.ips.length > 0 && (
+                              <span className="rounded bg-white/10 px-1 text-[9px] text-white/70">
+                                +{item.ips.length} IP
+                              </span>
+                            )}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="mt-5 grid grid-cols-2 gap-3">
@@ -459,7 +640,8 @@ export default function Generator() {
                 </button>
                 <p className="mt-3 text-center text-[11px] text-white/35">
                   تولید آنی در مرورگر — {portCount > 0 ? `${faNum(portCount)} پورت فعال` : "پورت پیش‌فرض ۴۴۳"} ·{" "}
-                  <span className="num">{pool.length}</span> مقصد تمیز
+                  <span className="num">{pool.length}</span> مقصد{" "}
+                  {hasVerified ? <span className="text-emerald-300">تست‌شده ✓</span> : "تمیز"}
                 </p>
               </div>
             </div>

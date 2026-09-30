@@ -39,19 +39,32 @@ export const CLEAN_IPS: string[] = [
 ];
 
 // Cloudflare-fronted hostnames — they resolve to Cloudflare edge IPs and are
-// often less congested than raw IPs.
+// often less congested than raw IPs. The live scanner probes these from the
+// user's own network and keeps only the ones that actually respond.
 export const CLEAN_DOMAINS: string[] = [
   "cloudflare.com",
   "www.cloudflare.com",
   "www.speedtest.net",
-  "www.speedtest.cn",
   "icook.tw",
   "ts.hpc.tw",
   "medium.com",
   "pastebin.com",
-  "www.digitalocean.com",
-  "edtunnel.anycast.eu.org",
+  "stackoverflow.com",
+  "npmjs.com",
+  "openai.com",
+  "chatgpt.com",
+  "claude.ai",
+  "notion.so",
+  "figma.com",
+  "gitlab.com",
+  "quizlet.com",
+  "canva.com",
+  "codepen.io",
 ];
+
+// These anycast IPs present valid TLS certificates for direct-IP access,
+// so the browser can truly measure them (other raw IPs can't be TLS-probed).
+export const PINGABLE_IPS: string[] = ["1.1.1.1", "1.0.0.1"];
 
 export type IpMode = "mix" | "ip" | "domain" | "custom";
 

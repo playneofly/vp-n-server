@@ -39,6 +39,27 @@ export async function onRequest(context) {
 
   const url = new URL(request.url);
 
+  // ── Health check: /health?uuid=&tpass= → verifies keys remotely ────
+  if (url.pathname === "/health") {
+    const qUuid = String(url.searchParams.get("uuid") || "").toLowerCase();
+    const qPass = String(url.searchParams.get("tpass") || "");
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        engine: "cf-forge/2",
+        uuidMatch: qUuid ? qUuid === userID : null,
+        trojanMatch: qPass ? sha224hex(qPass) === sha224hex(trojanPassword) : null,
+      }),
+      {
+        headers: {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store",
+          "access-control-allow-origin": "*",
+        },
+      }
+    );
+  }
+
   // ── Subscription endpoint: mixed VLESS + Trojan ────────────────────
   if (url.pathname === `/sub/${userID}`) {
     return subscriptionResponse(url, userID, trojanPassword);
