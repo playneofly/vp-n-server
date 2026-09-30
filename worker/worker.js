@@ -15,14 +15,16 @@ const DEFAULT_TROJAN_PASSWORD = "ForgeTrojan9217";
 
 const TLS_PORTS = [443, 8443, 2053, 2083, 2087, 2096];
 const SUB_ADDRESSES = [
+  "www.speedtest.net",
+  "icook.tw",
+  "ts.hpc.tw",
+  "cdn.jsdelivr.net",
+  "cdnjs.cloudflare.com",
+  "cloudflare.com",
+  "1.1.1.1",
+  "1.0.0.1",
   "188.114.96.7",
   "188.114.97.3",
-  "104.16.85.20",
-  "104.21.2.3",
-  "172.64.80.1",
-  "162.159.128.233",
-  "198.41.222.106",
-  "icook.tw",
 ];
 
 export default {

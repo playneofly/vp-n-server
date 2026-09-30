@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import Reveal from "./Reveal";
 import { toast } from "../lib/toast";
-import { isIPv4, msTone, scanCandidates, scanPorts, type ScanItem } from "../lib/scanner";
+import { isIPv4, msTone, scanCandidates, scanPorts, verifyPairs, type ScanItem } from "../lib/scanner";
 import {
   DEFAULT_TROJAN_PASSWORD,
   DEFAULT_UUID,
@@ -33,6 +33,7 @@ import {
   downloadText,
   faNum,
   generateConfigs,
+  generateFromPairs,
   isValidUUID,
   randomPassword,
   randomUUID,
@@ -94,10 +95,11 @@ export default function Generator() {
   const [qrFor, setQrFor] = useState<GenConfig | null>(null);
   const [justMade, setJustMade] = useState(false);
   const [health, setHealth] = useState<"idle" | "checking" | "ok" | "mismatch" | "down">("idle");
-  const [scanning, setScanning] = useState(false);
+  const [busy, setBusy] = useState<"" | "scan" | "verify">("");
   const [scanProgress, setScanProgress] = useState({ done: 0, total: 0 });
   const [scanItems, setScanItems] = useState<ScanItem[]>([]);
   const [useVerified, setUseVerified] = useState(false);
+  const [resultsVerified, setResultsVerified] = useState(false);
 
   useEffect(() => {
     try {
@@ -112,18 +114,13 @@ export default function Generator() {
 
   const uuidOk = isValidUUID(s.uuid);
   const domainOk = sanitizeDomain(s.domain).length > 3 && sanitizeDomain(s.domain).includes(".");
-  const portCount = s.tlsPorts.length + s.plainPorts.length;
 
   const basePool = useMemo(() => buildPool(s.ipMode, s.customIPs), [s.ipMode, s.customIPs]);
-  // addresses that survived the live scan from this very network
-  const verifiedAddrs = useMemo(() => {
-    const out: string[] = [];
-    for (const item of scanItems) {
-      if (item.ms === null) continue;
-      out.push(item.host, ...item.ips);
-    }
-    return [...new Set(out)];
-  }, [scanItems]);
+  // addresses that survived the live scan from this very network (TLS-verified end-to-end)
+  const verifiedAddrs = useMemo(
+    () => scanItems.filter((i) => i.ms !== null).map((i) => i.host),
+    [scanItems]
+  );
   const hasVerified = useVerified && verifiedAddrs.length > 0;
   const pool = hasVerified ? verifiedAddrs : basePool;
 
@@ -156,40 +153,107 @@ export default function Generator() {
     };
   }, [s.domain, s.uuid, s.trojanPassword, s.protocolMode, domainOk]);
 
-  // ── live scan from the user's network ──
-  const runScan = async () => {
-    if (scanning) return;
-    setScanning(true);
+  // ── live scan from the user's network (returns verified data too) ──
+  const runScan = async (): Promise<{ alive: string[]; openPorts: number[] } | null> => {
+    setBusy("scan");
     setScanItems([]);
     setUseVerified(false);
     const customDomains = s.customIPs
       .split(/[\s,،;\n]+/)
       .map((x) => x.trim())
       .filter((x) => x && !isIPv4(x));
-    const hosts = [...new Set([...CLEAN_DOMAINS, ...PINGABLE_IPS, ...customDomains])].slice(0, 22);
+    const hosts = [...new Set([...CLEAN_DOMAINS, ...PINGABLE_IPS, ...customDomains])].slice(0, 24);
     setScanProgress({ done: 0, total: hosts.length });
     const items = await scanCandidates(hosts, (done, total) => setScanProgress({ done, total }));
     setScanItems(items);
-    const alive = items.filter((i) => i.ms !== null);
+    const alive = items.filter((i) => i.ms !== null).map((i) => i.host);
     if (alive.length === 0) {
       toast("هیچ مقصدی روی شبکه‌ات پاسخ نداد — اتصال اینترنت را چک کن", "err");
-      setScanning(false);
-      return;
+      setBusy("");
+      return null;
     }
-    const portResults = await scanPorts(alive[0]!.host, TLS_PORTS);
-    const openPorts = portResults.filter((p) => p.ok).map((p) => p.port);
+    // probe ports on up to two best hosts
+    let openPorts: number[] = [];
+    for (const host of alive.slice(0, 2)) {
+      const pr = await scanPorts(host, TLS_PORTS);
+      openPorts = pr.filter((p) => p.ok).map((p) => p.port);
+      if (openPorts.length > 0) break;
+    }
     if (openPorts.length > 0) setS((prev) => ({ ...prev, tlsPorts: openPorts }));
     setUseVerified(true);
-    setScanning(false);
-    toast(`${faNum(alive.length)} مقصد سالم یافت شد و پورت‌های باز اعمال شدند`);
+    return { alive, openPorts };
   };
 
-  const generate = () => {
+  const runManualScan = () => {
+    if (busy) return;
+    void runScan().then((r) => {
+      setBusy("");
+      if (r) toast(`${faNum(r.alive.length)} مقصد سالم یافت شد و پورت‌های باز اعمال شدند`);
+    });
+  };
+
+  const finishConfigs = (configs: GenConfig[], verified: boolean) => {
+    setResults(configs);
+    setResultsVerified(verified);
+    setJustMade(false);
+    requestAnimationFrame(() => setJustMade(true));
+  };
+
+  // ── smart generation: scan → verify every pair → build only proven configs ──
+  const generate = async () => {
+    if (busy) return;
     if (!domainOk) return toast("اول دامنه‌ی معتبر سایت/ورکرت را وارد کن", "err");
     if (s.protocolMode !== "trojan" && !uuidOk) return toast("فرمت UUID معتبر نیست", "err");
     if (s.protocolMode !== "vless" && !s.trojanPassword.trim())
       return toast("رمز Trojan را وارد کن یا حالت را روی VLESS بگذار", "err");
-    if (pool.length === 0) return toast("هیچ آی‌پی تمیزی موجود نیست — چندتا آی‌پی سفارشی وارد کن", "err");
+
+    const count = Math.min(Math.max(1, Math.floor(s.count) || 1), MAX_COUNT);
+    let aliveList = hasVerified ? [...verifiedAddrs] : [];
+    let openPorts = s.tlsPorts.length ? [...s.tlsPorts] : [443];
+
+    if (aliveList.length === 0) {
+      const r = await runScan();
+      if (!r) {
+        setBusy("");
+        return;
+      }
+      aliveList = r.alive;
+      if (r.openPorts.length > 0) openPorts = r.openPorts;
+    }
+
+    // final gate: verify every (address × port) pair individually
+    setBusy("verify");
+    const rawPairs = aliveList.flatMap((address) => openPorts.map((port) => ({ address, port })));
+    setScanProgress({ done: 0, total: rawPairs.length });
+    const passing = await verifyPairs(rawPairs, (done, total) => setScanProgress({ done, total }));
+    setBusy("");
+
+    if (passing.length === 0) {
+      toast("موقتا هیچ مسیری پایدار نبود — چند لحظه‌ی دیگر دوباره امتحان کن", "err");
+      return;
+    }
+    const configs = generateFromPairs({
+      uuid: s.uuid.trim(),
+      trojanPassword: s.trojanPassword,
+      protocolMode: s.protocolMode,
+      domain: s.domain,
+      path: s.path,
+      prefix: s.prefix.trim() || "Forge",
+      count,
+      pairs: passing,
+    });
+    finishConfigs(configs, true);
+    toast(`${faNum(configs.length)} کانفیگ ساخته شد — همه تست‌شده و پینگ‌دار ✓`);
+  };
+
+  // ── quick generation without verification (static pools) ──
+  const generateQuick = () => {
+    if (busy) return;
+    if (!domainOk) return toast("اول دامنه‌ی معتبر سایت/ورکرت را وارد کن", "err");
+    if (s.protocolMode !== "trojan" && !uuidOk) return toast("فرمت UUID معتبر نیست", "err");
+    if (s.protocolMode !== "vless" && !s.trojanPassword.trim())
+      return toast("رمز Trojan را وارد کن یا حالت را روی VLESS بگذار", "err");
+    if (basePool.length === 0) return toast("هیچ آی‌پی تمیزی موجود نیست — چندتا آی‌پی سفارشی وارد کن", "err");
     const configs = generateConfigs({
       uuid: s.uuid.trim(),
       trojanPassword: s.trojanPassword,
@@ -200,12 +264,10 @@ export default function Generator() {
       path: s.path,
       prefix: s.prefix.trim() || "Forge",
       count: Math.min(Math.max(1, Math.floor(s.count) || 1), MAX_COUNT),
-      pool,
+      pool: basePool,
     });
-    setResults(configs);
-    setJustMade(false);
-    requestAnimationFrame(() => setJustMade(true));
-    toast(`${faNum(configs.length)} کانفیگ ساخته شد`);
+    finishConfigs(configs, false);
+    toast(`${faNum(configs.length)} کانفیگ ساخته شد (بدون تست)`);
   };
 
   const copyText = async (text: string, label: string) => {
@@ -499,16 +561,16 @@ export default function Generator() {
               {/* ── live network scan ── */}
               <div className="mt-5 rounded-2xl border border-emerald-400/20 bg-emerald-400/5 p-4">
                 <button
-                  onClick={runScan}
-                  disabled={scanning}
+                  onClick={runManualScan}
+                  disabled={busy !== ""}
                   className={`flex h-12 w-full items-center justify-center gap-2.5 rounded-xl text-sm font-extrabold transition ${
-                    scanning
+                    busy !== ""
                       ? "glass-soft cursor-wait text-white/60"
                       : "bg-gradient-to-l from-emerald-500 to-emerald-600 text-night-900 shadow-[0_10px_30px_-10px_rgba(52,211,153,.6)] hover:brightness-110 active:scale-[.99]"
                   }`}
                 >
-                  <Radar className={`h-5 w-5 ${scanning ? "animate-spin" : ""}`} />
-                  {scanning
+                  <Radar className={`h-5 w-5 ${busy === "scan" ? "animate-spin" : ""}`} />
+                  {busy === "scan"
                     ? `در حال اسکن… ${faNum(scanProgress.done)}/${faNum(scanProgress.total)}`
                     : "اسکن زنده از شبکه‌ی خودت"}
                 </button>
@@ -516,7 +578,7 @@ export default function Generator() {
                   مقصدها و پورت‌ها همین‌جا از روی اینترنت خودت تست می‌شوند و کانفیگ‌ها فقط از مسیرهای سالم ساخته می‌شوند
                 </p>
 
-                {scanItems.length > 0 && !scanning && (
+                {scanItems.length > 0 && busy === "" && (
                   <div className="mt-3">
                     <div className="mb-2 flex items-center justify-between">
                       <span className="text-[11px] font-bold text-white/50">
@@ -551,11 +613,6 @@ export default function Generator() {
                               <span className="opacity-80">{item.ms}ms</span>
                             ) : (
                               <X className="h-3 w-3" />
-                            )}
-                            {item.ips.length > 0 && (
-                              <span className="rounded bg-white/10 px-1 text-[9px] text-white/70">
-                                +{item.ips.length} IP
-                              </span>
                             )}
                           </span>
                         );
@@ -632,16 +689,47 @@ export default function Generator() {
                 </div>
 
                 <button
-                  onClick={generate}
-                  className="btn-brand group mt-6 flex h-16 w-full items-center justify-center gap-3 rounded-2xl text-lg font-black text-night-900"
+                  onClick={() => void generate()}
+                  disabled={busy !== ""}
+                  className={`group mt-6 flex h-16 w-full items-center justify-center gap-3 rounded-2xl text-lg font-black transition ${
+                    busy !== "" ? "glass-soft cursor-wait text-white/70" : "btn-brand text-night-900"
+                  }`}
                 >
-                  <Zap className="h-6 w-6 transition-transform duration-300 group-hover:scale-125 group-hover:-rotate-12" />
-                  ساخت {faNum(Math.min(s.count, MAX_COUNT))} کانفیگ
+                  {busy === "scan" ? (
+                    <>
+                      <Radar className="h-6 w-6 animate-spin text-emerald-300" />
+                      اسکن شبکه… {faNum(scanProgress.done)}/{faNum(scanProgress.total)}
+                    </>
+                  ) : busy === "verify" ? (
+                    <>
+                      <Zap className="h-6 w-6 animate-pulse text-brand-300" />
+                      تأیید نهایی مسیرها… {faNum(scanProgress.done)}/{faNum(scanProgress.total)}
+                    </>
+                  ) : (
+                    <>
+                      <Zap className="h-6 w-6 transition-transform duration-300 group-hover:scale-125 group-hover:-rotate-12" />
+                      ساخت {faNum(Math.min(s.count, MAX_COUNT))} کانفیگ تأییدشده
+                    </>
+                  )}
                 </button>
-                <p className="mt-3 text-center text-[11px] text-white/35">
-                  تولید آنی در مرورگر — {portCount > 0 ? `${faNum(portCount)} پورت فعال` : "پورت پیش‌فرض ۴۴۳"} ·{" "}
-                  <span className="num">{pool.length}</span> مقصد{" "}
-                  {hasVerified ? <span className="text-emerald-300">تست‌شده ✓</span> : "تمیز"}
+                <p className="mt-3 text-center text-[11px] leading-5 text-white/35">
+                  {hasVerified ? (
+                    <>
+                      <span className="text-emerald-300">✓ حالت تأییدشده فعال</span> — {faNum(pool.length)} مقصد
+                      زنده · فقط مسیرهای تست‌شده استفاده می‌شود
+                    </>
+                  ) : (
+                    <>
+                      هنگام ساخت، اول شبکه‌ات اسکن و هر مسیر تک‌به‌تک تأیید می‌شود
+                      <br />
+                      <button
+                        onClick={generateQuick}
+                        className="mt-1 text-brand-300/80 underline underline-offset-4 transition hover:text-brand-300"
+                      >
+                        یا بدون تست سریع بساز (از لیست‌های آماده)
+                      </button>
+                    </>
+                  )}
                 </p>
               </div>
             </div>
@@ -664,8 +752,15 @@ export default function Generator() {
                 <>
                   <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                     <div>
-                      <div className="text-base font-extrabold text-white">
-                        {faNum(results.length)} کانفیگ آماده
+                      <div className="flex items-center gap-2">
+                        <div className="text-base font-extrabold text-white">
+                          {faNum(results.length)} کانفیگ آماده
+                        </div>
+                        {resultsVerified && (
+                          <span className="rounded-full bg-emerald-400/15 px-2.5 py-1 text-[10px] font-black text-emerald-300">
+                            ✓ ۱۰۰٪ تست‌شده
+                          </span>
+                        )}
                       </div>
                       <div className="mt-0.5 flex items-center gap-2 text-[11px] text-white/40">
                         <span>
@@ -738,6 +833,9 @@ export default function Generator() {
                           </div>
                           <div className="num mt-0.5 truncate text-left text-[10.5px] text-white/40">
                             {r.address}:{r.port}
+                            {r.ms !== undefined && (
+                              <span className="text-emerald-400/80"> · {r.ms}ms ✓</span>
+                            )}
                           </div>
                         </div>
                         <span

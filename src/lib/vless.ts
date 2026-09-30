@@ -18,6 +18,7 @@ export interface GenConfig {
   port: number;
   tls: boolean;
   protocol: Protocol;
+  ms?: number; // measured latency when produced from the verified path
 }
 
 export interface GenOptions {
@@ -171,6 +172,76 @@ export function generateConfigs(opts: GenOptions): GenConfig[] {
         }),
       });
     }
+  }
+  return out;
+}
+
+export interface VerifiedPair {
+  address: string;
+  port: number;
+  ms: number;
+}
+
+export interface PairGenOptions {
+  uuid: string;
+  trojanPassword: string;
+  protocolMode: ProtocolMode;
+  domain: string;
+  path: string;
+  prefix: string;
+  count: number;
+  pairs: VerifiedPair[];
+}
+
+/** Generate configs exclusively from verified (address, port) pairs — TLS only. */
+export function generateFromPairs(opts: PairGenOptions): GenConfig[] {
+  const { uuid, trojanPassword, protocolMode, domain, path, prefix, count, pairs } = opts;
+  const host = sanitizeDomain(domain);
+  const cleanPath = sanitizePath(path);
+  const shuffled = [...pairs].sort(() => Math.random() - 0.5);
+  const out: GenConfig[] = [];
+
+  for (let i = 0; i < count; i++) {
+    const pair = shuffled[i % shuffled.length]!;
+    const protocol: Protocol =
+      protocolMode === "mix" ? (Math.random() < 0.5 ? "vless" : "trojan") : protocolMode;
+    const tag = protocol === "trojan" ? "TR" : "VL";
+    const name = `${prefix}-${tag}-${String(i + 1).padStart(3, "0")}`;
+    const base = {
+      id: `${i}-${Math.random().toString(36).slice(2, 8)}`,
+      name,
+      address: pair.address,
+      port: pair.port,
+      tls: true,
+      protocol,
+      ms: pair.ms,
+    };
+    out.push(
+      protocol === "trojan"
+        ? {
+            ...base,
+            uri: buildTrojanLink({
+              password: trojanPassword.trim(),
+              address: pair.address,
+              port: pair.port,
+              host,
+              path: cleanPath,
+              name,
+            }),
+          }
+        : {
+            ...base,
+            uri: buildVlessLink({
+              uuid,
+              address: pair.address,
+              port: pair.port,
+              host,
+              path: cleanPath,
+              name,
+              tls: true,
+            }),
+          }
+    );
   }
   return out;
 }
