@@ -1,27 +1,45 @@
-import { ShieldCheck, Zap } from "lucide-react";
+import { Zap, GitBranch, HeartHandshake } from "lucide-react";
 
 export default function Footer() {
   return (
-    <footer className="relative border-t border-white/6">
-      <div className="mx-auto max-w-6xl px-4 py-12">
-        <div className="flex flex-col items-center justify-between gap-6 md:flex-row">
+    <footer className="relative border-t border-edge bg-pane/60">
+      <div className="mx-auto max-w-6xl px-5 py-12 sm:px-8">
+        <div className="flex flex-col items-start justify-between gap-8 sm:flex-row sm:items-center">
           <div className="flex items-center gap-3">
-            <span className="btn-brand flex h-9 w-9 items-center justify-center rounded-xl text-night-900">
-              <Zap className="h-4.5 w-4.5" strokeWidth={2.6} />
+            <span className="grid h-9 w-9 place-items-center rounded-lg border border-edge2 bg-pane text-volt">
+              <Zap size={16} />
             </span>
             <div>
-              <div className="text-sm font-extrabold text-white">کارخانه کانفیگ ابری</div>
-              <div className="num text-[10px] font-bold uppercase tracking-[0.3em] text-white/30">
-                CF Forge · Cloudflare Pages
+              <div className="font-mono text-sm font-bold text-ink" dir="ltr">
+                CF·FORGE <span className="text-volt">//IR</span>
+              </div>
+              <div className="mt-0.5 text-[11px] text-dim">
+                پچ سازگاری با اینترنت ایران — برای پروژه‌ی vp-n-server
               </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 text-[11.5px] leading-5 text-white/40">
-            <ShieldCheck className="h-4 w-4 shrink-0 text-emerald-400/70" />
-            فقط برای استفاده‌های قانونی و شخصی؛ مسئولیت بهره‌برداری بر عهده‌ی کاربر است.
+          <div className="flex flex-wrap items-center gap-4 text-[12px] text-dim">
+            <a
+              href="https://github.com/playneofly/vp-n-server"
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-2 transition-colors hover:text-volt"
+            >
+              <GitBranch size={14} />
+              ریپوی اصلی
+            </a>
+            <span className="inline-flex items-center gap-2">
+              <HeartHandshake size={14} className="text-ember" />
+              ساخته شده برای اینترنت آزاد
+            </span>
           </div>
         </div>
+
+        <p className="mt-8 border-t border-edge/50 pt-6 text-[11.5px] leading-6 text-dim">
+          این ابزار برای دسترسی آزاد و قانونی به اینترنت ساخته شده است. مسئولیت استفاده بر عهده‌ی
+          کاربر است. آی‌پی‌ها و دامنه‌های کلادفلر مِتعلق به Cloudflare Inc. هستند.
+        </p>
       </div>
     </footer>
   );

@@ -1,272 +1,95 @@
-import { useState } from "react";
-import {
-  BookOpenText,
-  Check,
-  CloudCog,
-  Copy,
-  GitBranch,
-  KeyRound,
-  Rocket,
-  Server,
-  Settings2,
-  Workflow,
-} from "lucide-react";
-import Reveal from "./Reveal";
-import { toast } from "../lib/toast";
-import { DEFAULT_TROJAN_PASSWORD, DEFAULT_UUID } from "../lib/vless";
+import { GitBranch, CloudUpload, SlidersHorizontal, Rocket, Link2, Wrench } from "lucide-react";
+import { Section, Reveal, CodeBlock, CopyBtn } from "./ui";
+import { subUrl } from "../lib/forge";
+import { useStore } from "../lib/state";
+
+const STEPS = [
+  {
+    icon: GitBranch,
+    title: "فایل‌ها را جایگزین کن",
+    body: "دو فایل کیت پچ (بخش قبل) را داخل ریپوی playneofly/vp-n-server جایگزین و push کن. اسم‌ها عوض نمی‌شود؛ Cloudflare خودش ساخت دوباره را شروع می‌کند.",
+  },
+  {
+    icon: CloudUpload,
+    title: "صبر کن Pages بازسازی کند",
+    body: "از داشبورد → پروژه‌ات → تب Deployments وضعیت را ببین تا Build سبز شود. معمولا زیر دو دقیقه است.",
+  },
+  {
+    icon: SlidersHorizontal,
+    title: "متغیرهای محیطی را بزن",
+    body: "Settings → Environment variables → Production: مقدار UUID (بدون تغییر)، PROXYIP (با کاما) و FALLBACK_SITE را وارد کن. حتما بعدش از تب Deployments گزینه Retry deployment را بزن.",
+  },
+  {
+    icon: Link2,
+    title: "سابسکریپشن چندپورتی را وصل کن",
+    body: "لینک /sub/UUIDت را در v2rayN یا Hiddify به‌عنوان اشتراک اضافه کن؛ الان ۶۰ کانفیگ می‌گیری: ۲۰ ورودی × ۳ پورت.",
+  },
+  {
+    icon: Wrench,
+    title: "فرگمنت را روشن کن",
+    body: "بدون این قدم هنوز ممکن است DPI هلو را شکار کند. مقادیر JSON آماده را از بخش «فرگمنت» بردار و روشنش کن؛ بعد با Test server real delay از بین ساب بهترین را نگه دار.",
+  },
+  {
+    icon: Rocket,
+    title: "جایزه: دامنه‌ی شخصی",
+    body: "اگر دامنه داری، در Pages → Custom domains وصلش کن تا آدرس pages.dev کمتر در معرض فیلتر باشد؛ از Custom domains معمولی (نه Workers route) بایاس استفاده شود.",
+  },
+];
 
 export default function Guide() {
+  const { domain, uuid } = useStore();
+  const sub = subUrl(domain || "your-project.pages.dev", uuid);
+
   return (
-    <section id="guide" className="relative mx-auto max-w-6xl scroll-mt-28 px-4 py-16 md:py-24">
-      <Reveal>
-        <div className="mb-4 flex items-center gap-2 text-xs font-bold tracking-wider text-brand-400">
-          <BookOpenText className="h-4 w-4" />
-          راهنمای دپلوی
-        </div>
-        <h2 className="text-3xl font-black text-white md:text-5xl">
-          ۵ دقیقه تا داشتن سرور رایگانِ خودت
-        </h2>
-        <p className="mt-4 max-w-2xl text-sm leading-7 text-white/50">
-          این پروژه دو بخش دارد: <b className="text-white/80">رابط کاربری</b> (همین صفحه) و{" "}
-          <b className="text-white/80">موتور پروکسی</b> که داخل پوشه‌ی{" "}
-          <code className="num rounded bg-white/8 px-1.5 py-0.5 text-[11px] text-brand-300">functions</code>{" "}
-          قرار دارد. کلادفلر هر دو را با هم و به‌صورت خودکار دپلوی می‌کند — کانفیگ‌ها همین‌طوری واقعی کار می‌کنند.
-        </p>
-      </Reveal>
-
-      <div className="mt-12 grid gap-5 lg:grid-cols-2">
-        <StepCard
-          delay={0}
-          num="۱"
-          icon={<GitBranch className="h-5 w-5" />}
-          title="آپلود پروژه در گیت‌هاب"
-          body={
-            <>
-              <p>یک مخزن (Repository) جدید در github.com بساز و فایل‌های پروژه را آپلود کن:</p>
-              <CodeBlock
-                code={`git init
-git add .
-git commit -m "cf-forge"
-git remote add origin https://github.com/USER/cf-forge.git
-git push -u origin main`}
-              />
-              <p className="text-white/40">
-                یا ساده‌تر: در گیت‌هاب <b>New repository</b> را بزن و فایل‌ها را با گزینه‌ی «uploading an existing file» بکش و رها کن.
-              </p>
-            </>
-          }
-        />
-
-        <StepCard
-          delay={80}
-          num="۲"
-          icon={<CloudCog className="h-5 w-5" />}
-          title="اتصال به Cloudflare Pages"
-          body={
-            <>
-              <p>
-                وارد <span className="num text-brand-300">dash.cloudflare.com</span> شو و از منوی{" "}
-                <b>Workers & Pages</b> گزینه‌ی <b>Create</b> ← تب <b>Pages</b> ←{" "}
-                <b>Connect to Git</b> را انتخاب کن و مخزن را وصل کن. بعد این تنظیمات را بزن:
-              </p>
-              <SettingsTable
-                rows={[
-                  ["Framework preset", "None"],
-                  ["Build command", "npm run build"],
-                  ["Build output directory", "dist"],
-                ]}
-              />
-              <p className="text-white/40">
-                <b>Save and Deploy</b> را بزن. پوشه‌ی{" "}
-                <code className="num rounded bg-white/8 px-1.5 py-0.5 text-[11px] text-brand-300">functions</code>{" "}
-                خودکار شناسایی و موتور پروکسی فعال می‌شود — کار دیگری لازم نیست.
-              </p>
-              <div className="rounded-xl border border-brand-500/25 bg-brand-500/8 p-3 text-[11.5px] leading-6 text-brand-300/90">
-                در لیست فریم‌ورک‌ها گزینه‌ی «Vite» وجود ندارد — حتما <b>None</b> را انتخاب کن
-                (VitePress مخصوص ابزار دیگری است). اگر قبلا با تنظیمات اشتباه دپلوی کردی: برو به{" "}
-                <b>Settings ← Builds & deployments</b>، روی ✎ بزن، خروجی را{" "}
-                <span className="num font-bold">dist</span> کن و بعد از تب <b>Deployments</b> گزینه‌ی{" "}
-                <b>Retry deployment</b> را بزن.
+    <Section
+      id="deploy"
+      kicker="DEPLOY"
+      title={
+        <>
+          استقرار پچ — <span className="text-volt">۱۵ دقیقه تا کانفیگ سالم</span>
+        </>
+      }
+      desc="مسیر کامل از push تا اتصال اول؛ فرض بر این است که پروژه‌ات الان روی Cloudflare Pages بالاست."
+    >
+      <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-3">
+        {STEPS.map((s, i) => (
+          <Reveal key={s.title} delay={i * 0.07}>
+            <div className="panel group relative h-full rounded-2xl p-6">
+              <span className="outline-text absolute -top-2 left-4 font-mono text-5xl font-bold">
+                {String(i + 1).padStart(2, "0")}
+              </span>
+              <div className="mb-4 grid h-11 w-11 place-items-center rounded-xl border border-edge2 bg-pane2 text-volt transition-shadow group-hover:shadow-[0_0_24px_rgba(61,250,168,0.25)]">
+                <s.icon size={19} />
               </div>
-            </>
-          }
-        />
-
-        <StepCard
-          delay={120}
-          num="۳"
-          icon={<KeyRound className="h-5 w-5" />}
-          title="تنظیم UUID (خیلی مهم)"
-          body={
-            <>
-              <p>
-                داخل پروژه‌ی Pages برو به <b>Settings</b> ← <b>Environment variables</b> و برای{" "}
-                <b>Production</b> این متغیرها را اضافه کن:
-              </p>
-              <SettingsTable
-                rows={[
-                  ["Variable 1", "UUID  →  کلید VLESS"],
-                  ["Variable 2", "TROJAN_PASSWORD  →  کلید Trojan"],
-                  ["Value", "مقادیر سازنده‌ی بالا را کپی کن"],
-                ]}
-              />
-              <p className="text-white/40">
-                ⚠️ بعد از ذخیره، حتما از تب <b>Deployments</b> گزینه‌ی <b>Retry deployment</b> /{" "}
-                <b>Create new deployment</b> را بزن تا متغیرها اعمال شوند. اگر متغیر نگذاری، مقادیر پیش‌فرض
-                پروژه استفاده می‌شود:
-              </p>
-              <CodeBlock code={`UUID = ${DEFAULT_UUID}\nTROJAN_PASSWORD = ${DEFAULT_TROJAN_PASSWORD}`} />
-              <p className="text-white/40">
-                همین کلیدها را در فیلدهای «کلید UUID» و «رمز Trojan» صفحه‌ی کانفیگ‌ساز وارد کن تا
-                کانفیگ‌ها با سرور هماهنگ باشند.
-              </p>
-            </>
-          }
-        />
-
-        <StepCard
-          delay={160}
-          num="۴"
-          icon={<Rocket className="h-5 w-5" />}
-          title="استفاده + دامنه‌ی شخصی (اختیاری)"
-          body={
-            <>
-              <p>
-                سایتت روی آدرس <span className="num text-brand-300">your-project.pages.dev</span> بالا می‌آید.
-                بازش کن، تعداد بده و کانفیگ بساز. لینک اشتراک خودکار:
-              </p>
-              <CodeBlock code={`https://your-project.pages.dev/sub/YOUR-UUID`} />
-              <p className="text-white/40">
-                از تب <b>Custom domains</b> می‌توانی دامنه‌ی شخصی خودت را وصل کنی (پیشنهاد می‌شود — پایدارتر است).
-                آنوقت همان دامنه را در فرم کانفیگ‌ساز بگذار.
-              </p>
-              <div className="mt-2 flex items-start gap-2 rounded-xl border border-emerald-400/25 bg-emerald-400/8 p-3 text-[11.5px] leading-5 text-emerald-300/90">
-                <Check className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                تمام شد! کانفیگ‌هایی که می‌سازی مستقیما به موتور پروکسیِ همین دامنه وصل می‌شوند و واقعی کار می‌کنند.
-              </div>
-            </> 
-          }
-        />
+              <h3 className="mb-2 text-[15px] font-extrabold text-ink">{s.title}</h3>
+              <p className="text-[12.5px] leading-7 text-mute">{s.body}</p>
+              {i === 3 && (
+                <div className="mt-4">
+                  <div className="mb-2 font-mono text-[10px] text-dim" dir="ltr">
+                    {sub}
+                  </div>
+                  <CopyBtn text={sub} label="کپی لینک ساب" />
+                </div>
+              )}
+            </div>
+          </Reveal>
+        ))}
       </div>
 
-      {/* alternative worker path */}
-      <Reveal delay={200}>
-        <div className="glass mt-6 rounded-3xl p-6 md:p-8">
-          <div className="flex items-center gap-3">
-            <span className="glass-soft flex h-11 w-11 items-center justify-center rounded-2xl text-brand-400">
-              <Server className="h-5.5 w-5.5" />
-            </span>
-            <div>
-              <h3 className="text-lg font-extrabold text-white">مسیر جایگزین: Worker جداگانه</h3>
-              <p className="text-xs text-white/40">اگر Pages نمی‌خواهی یا می‌خواهی پروکسی از سایت جدا باشد</p>
-            </div>
-          </div>
-          <div className="mt-5 grid gap-4 md:grid-cols-2">
-            <div className="text-[13px] leading-7 text-white/55">
-              فایل <code className="num rounded bg-white/8 px-1.5 py-0.5 text-[11px] text-brand-300">worker/worker.js</code>{" "}
-              نسخه‌ی مستقلِ آماده است. در داشبورد کلادفلر برو به{" "}
-              <b className="text-white/80">Workers</b> ← <b className="text-white/80">Create Worker</b>، محتوای
-              فایل را جای‌گذاری کن، Deploy بزن و بعد متغیر <span className="num font-bold text-white/80">UUID</span>{" "}
-              را در <b className="text-white/80">Settings ← Variables</b> ست کن. آدرس ورکر
-              (<span className="num text-brand-300">name.workers.dev</span>) را در فرم کانفیگ‌ساز وارد کن.
-            </div>
-            <div>
-              <CodeBlock
-                code={`# یا با ترمینال (نیازمند Node.js 18+):
-cd worker
+      <Reveal delay={0.1}>
+        <div className="mt-8">
+          <CodeBlock
+            title="optional — standalone worker route"
+            code={`cd worker
 npx wrangler login
-npx wrangler deploy`}
-              />
-            </div>
-          </div>
+npx wrangler deploy
+# afterwards set env vars UUID / PROXYIP / FALLBACK_SITE
+# in Workers → Settings → Variables`}
+            maxH={180}
+            tone="ember"
+          />
         </div>
       </Reveal>
-
-      <Reveal delay={240}>
-        <div className="mt-8 flex flex-wrap items-center justify-center gap-2 text-[11.5px] text-white/40">
-          <span className="glass-soft flex items-center gap-1.5 rounded-full px-3.5 py-2">
-            <Settings2 className="h-3.5 w-3.5 text-brand-400" /> متغیر اختیاری دیگر: PROXYIP
-          </span>
-          <span className="glass-soft flex items-center gap-1.5 rounded-full px-3.5 py-2">
-            <Workflow className="h-3.5 w-3.5 text-brand-400" /> سازگار با v2rayNG · Streisand · sing-box · Shadowrocket
-          </span>
-        </div>
-      </Reveal>
-    </section>
-  );
-}
-
-function StepCard({
-  num,
-  icon,
-  title,
-  body,
-  delay,
-}: {
-  num: string;
-  icon: React.ReactNode;
-  title: string;
-  body: React.ReactNode;
-  delay: number;
-}) {
-  return (
-    <Reveal delay={delay}>
-      <div className="glass h-full rounded-3xl p-6 md:p-7">
-        <div className="flex items-center gap-3">
-          <span className="btn-brand num flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-sm font-black text-night-900">
-            {num}
-          </span>
-          <h3 className="flex items-center gap-2 text-[17px] font-extrabold text-white">
-            {title}
-            <span className="text-brand-400/80">{icon}</span>
-          </h3>
-        </div>
-        <div className="mt-4 space-y-3.5 text-[13px] leading-7 text-white/55">{body}</div>
-      </div>
-    </Reveal>
-  );
-}
-
-function SettingsTable({ rows }: { rows: [string, string][] }) {
-  return (
-    <div className="glass-soft overflow-hidden rounded-2xl" dir="ltr">
-      {rows.map(([k, v], i) => (
-        <div
-          key={k}
-          className={`flex items-center justify-between gap-4 px-4 py-2.5 text-[11.5px] ${
-            i !== rows.length - 1 ? "border-b border-white/6" : ""
-          }`}
-        >
-          <span className="num text-white/40">{k}</span>
-          <span className="num rounded-lg bg-brand-500/12 px-2.5 py-1 font-bold text-brand-300">{v}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function CodeBlock({ code }: { code: string }) {
-  const [ok, setOk] = useState(false);
-  return (
-    <div className="group relative" dir="ltr">
-      <pre className="glass-soft num overflow-x-auto rounded-2xl p-4 text-[11px] leading-6 text-emerald-200/80">
-        {code}
-      </pre>
-      <button
-        onClick={async () => {
-          try {
-            await navigator.clipboard.writeText(code);
-            toast("کپی شد");
-            setOk(true);
-            setTimeout(() => setOk(false), 1500);
-          } catch {
-            /* ignore */
-          }
-        }}
-        className="glass-soft absolute end-2 top-2 flex h-8 w-8 items-center justify-center rounded-lg text-white/50 opacity-0 transition group-hover:opacity-100 hover:text-white"
-      >
-        {ok ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
-      </button>
-    </div>
+    </Section>
   );
 }
