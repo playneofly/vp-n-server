@@ -1,11 +1,4 @@
-# Cloudflare Pages build configuration (read automatically by Pages on every deploy).
-# "name" MUST exactly match your Pages project name in the Cloudflare dashboard.
+# نام باید دقیقاً با نام پروژه‌ی Pages در داشبورد کلادفلر یکی باشد
 name = "vp-n-server"
+compatibility_date = "2024-06-20"
 pages_build_output_dir = "dist"
-compatibility_date = "2025-01-01"
-
-# Optional environment variables (you can also set them in:
-# Pages project → Settings → Environment variables)
-# [vars]
-# UUID = "b3311f0d-72e4-4f9c-9a3d-5c6b7a8f9e0d"
-# PROXYIP = ""

@@ -1,267 +1,153 @@
-// Core config link engine — VLESS + Trojan.
+// ============================================================
+//  CF Forge — منطق ساخت کانفیگ VLESS
+//  همه‌چیز داخل مرورگر خودِ کاربر ساخته می‌شود؛ هیچ اسکنی در کار نیست.
+// ============================================================
 
 export const DEFAULT_UUID = "b3311f0d-72e4-4f9c-9a3d-5c6b7a8f9e0d";
-export const DEFAULT_TROJAN_PASSWORD = "ForgeTrojan9217";
+export const DEFAULT_BRAND = "CF.FORGE";
+export const MAX_COUNT = 30;
 
-export type Protocol = "vless" | "trojan";
-export type ProtocolMode = "mix" | Protocol;
+// ورودی‌های ثابت و تمیز کلادفلر — رنج‌های رسمی Anycast کلادفلر.
+// آی‌پی فقط «درِ ورودی» است؛ SNI/Host تعیین می‌کند ترافیک به کدام سایت برسد.
+// (دقیقاً مثل همان نمونه‌ای که برایت کار کرد)
+export const CLEAN_IPS: readonly string[] = [
+  "172.67.136.197",
+  "172.64.32.22",
+  "172.67.73.163",
+  "172.64.155.209",
+  "172.67.182.145",
+  "172.64.198.43",
+  "104.16.210.110",
+  "104.17.148.22",
+  "104.18.32.47",
+  "104.19.58.91",
+  "104.20.26.231",
+  "104.21.41.186",
+  "104.22.5.140",
+  "104.24.101.62",
+  "104.25.152.30",
+  "104.26.13.173",
+  "104.27.200.88",
+  "188.114.96.3",
+  "188.114.97.3",
+  "162.159.135.42",
+  "162.159.44.51",
+  "198.41.191.227",
+  "190.93.244.18",
+  "141.101.113.140",
+  "108.162.196.77",
+  "173.245.52.90",
+  "103.21.244.15",
+  "103.22.201.133",
+  "103.31.5.77",
+  "131.0.72.55",
+  "www.speedtest.net",
+  "www.cloudflare.com",
+];
 
-// Cloudflare supports these ports for proxied (orange-cloud) hostnames.
-export const TLS_PORTS = [443, 8443, 2053, 2083, 2087, 2096];
-export const PLAIN_PORTS = [80, 8080, 8880, 2052, 2082, 2086, 2095];
-
-export interface GenConfig {
+export interface VlessConfig {
   id: string;
+  index: number;
+  entry: string;
   name: string;
-  uri: string;
-  address: string;
-  port: number;
-  tls: boolean;
-  protocol: Protocol;
-  ms?: number; // measured latency when produced from the verified path
+  link: string;
 }
 
-export interface GenOptions {
-  uuid: string;
-  trojanPassword: string;
-  protocolMode: ProtocolMode;
+export interface ForgeInput {
   domain: string;
-  tlsPorts: number[];
-  plainPorts: number[];
-  path: string; // without leading slash, may be empty
-  prefix: string;
+  uuid: string;
   count: number;
-  pool: string[]; // clean addresses to place in the "address" slot
+  brand: string;
+}
+
+const TOKEN_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+
+function randomBytes(len: number): Uint8Array {
+  const bytes = new Uint8Array(len);
+  crypto.getRandomValues(bytes);
+  return bytes;
+}
+
+export function randomToken(len = 12): string {
+  const bytes = randomBytes(len);
+  let out = "";
+  for (let i = 0; i < len; i++) out += TOKEN_CHARS[bytes[i] % TOKEN_CHARS.length];
+  return out;
 }
 
 export function randomUUID(): string {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return crypto.randomUUID();
-  }
-  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
-    const v = c === "x" ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
+  const bytes = randomBytes(16);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-export function isValidUUID(s: string): boolean {
-  return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(
-    s.trim()
+export function isValidUUID(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value.trim()
   );
 }
 
-const PASS_CHARS = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789";
-
-export function randomPassword(len = 12): string {
-  const buf = new Uint8Array(len);
-  crypto.getRandomValues(buf);
-  return Array.from(buf, (b) => PASS_CHARS[b % PASS_CHARS.length]).join("");
-}
-
-export function sanitizePath(p: string): string {
-  return p.trim().replace(/^\/+/, "").replace(/\s+/g, "");
-}
-
-export function sanitizeDomain(d: string): string {
-  return d
+export function normalizeDomain(raw: string): string {
+  return raw
     .trim()
+    .toLowerCase()
     .replace(/^https?:\/\//, "")
     .replace(/\/.*$/, "")
-    .toLowerCase();
+    .replace(/[^a-z0-9.-]/g, "");
 }
 
-export function buildVlessLink(args: {
-  uuid: string;
-  address: string;
-  port: number;
-  host: string;
-  path: string;
-  name: string;
-  tls: boolean;
-}): string {
-  const { uuid, address, port, host, path, name, tls } = args;
-  const encPath = path ? `%2F${encodeURIComponent(path)}` : "%2F";
-  const params = new URLSearchParams();
-  params.set("encryption", "none");
-  params.set("security", tls ? "tls" : "none");
-  if (tls) {
-    params.set("sni", host);
-    params.set("fp", "randomized");
-    params.set("alpn", "http/1.1");
+export function isValidDomain(value: string): boolean {
+  return /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(value);
+}
+
+function shuffle<T>(arr: readonly T[]): T[] {
+  const copy = [...arr];
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
   }
-  params.set("type", "ws");
-  params.set("host", host);
-  params.set("path", encPath);
-  return `vless://${uuid}@${address}:${port}?${params.toString()}#${encodeURIComponent(name)}`;
+  return copy;
 }
 
-export function buildTrojanLink(args: {
-  password: string;
-  address: string;
-  port: number;
-  host: string;
-  path: string;
-  name: string;
-}): string {
-  const { password, address, port, host, path, name } = args;
-  const encPath = path ? `%2F${encodeURIComponent(path)}` : "%2F";
-  const params = new URLSearchParams();
-  params.set("security", "tls");
-  params.set("sni", host);
-  params.set("fp", "randomized");
-  params.set("alpn", "http/1.1");
-  params.set("type", "ws");
-  params.set("host", host);
-  params.set("path", encPath);
-  return `trojan://${encodeURIComponent(password)}@${address}:${port}?${params.toString()}#${encodeURIComponent(name)}`;
-}
+/**
+ * ساخت N کانفیگ VLESS با فرمت دقیق موردانتظار کلاینت‌ها
+ * (همان ساختاری که روی Worker/Live کانفیگ نمونه کار کرد)
+ */
+export function forgeConfigs(input: ForgeInput): VlessConfig[] {
+  const domain = normalizeDomain(input.domain);
+  const uuid = input.uuid.trim().toLowerCase();
+  const brand = (input.brand || DEFAULT_BRAND).trim() || DEFAULT_BRAND;
+  const count = Math.max(1, Math.min(MAX_COUNT, Math.floor(input.count) || 1));
+  const pool = shuffle(CLEAN_IPS);
 
-export function generateConfigs(opts: GenOptions): GenConfig[] {
-  const { uuid, trojanPassword, protocolMode, domain, tlsPorts, plainPorts, path, prefix, count, pool } = opts;
-  const host = sanitizeDomain(domain);
-  const cleanPath = sanitizePath(path);
-  const addresses = pool.length ? pool : [host];
-
-  const vlessPlan: { port: number; tls: boolean }[] = [
-    ...tlsPorts.map((port) => ({ port, tls: true })),
-    ...plainPorts.map((port) => ({ port, tls: false })),
-  ];
-  if (vlessPlan.length === 0) vlessPlan.push({ port: 443, tls: true });
-  // Trojan always rides TLS (its only key is the password).
-  const trojanPorts = tlsPorts.length ? tlsPorts : [443];
-
-  const out: GenConfig[] = [];
-  let trojanIdx = 0;
-  let vlessIdx = 0;
+  const out: VlessConfig[] = [];
   for (let i = 0; i < count; i++) {
-    const protocol: Protocol =
-      protocolMode === "mix" ? (Math.random() < 0.5 ? "vless" : "trojan") : protocolMode;
-    const address = addresses[Math.floor(Math.random() * addresses.length)];
-    const tag = protocol === "trojan" ? "TR" : "VL";
-    const name = `${prefix}-${tag}-${String(i + 1).padStart(3, "0")}`;
-
-    if (protocol === "trojan") {
-      const port = trojanPorts[trojanIdx++ % trojanPorts.length];
-      out.push({
-        id: `${i}-${Math.random().toString(36).slice(2, 8)}`,
-        name,
-        address,
-        port,
-        tls: true,
-        protocol,
-        uri: buildTrojanLink({ password: trojanPassword.trim(), address, port, host, path: cleanPath, name }),
-      });
-    } else {
-      const plan = vlessPlan[vlessIdx++ % vlessPlan.length];
-      out.push({
-        id: `${i}-${Math.random().toString(36).slice(2, 8)}`,
-        name,
-        address,
-        port: plan.port,
-        tls: plan.tls,
-        protocol,
-        uri: buildVlessLink({
-          uuid,
-          address,
-          port: plan.port,
-          host,
-          path: cleanPath,
-          name,
-          tls: plan.tls,
-        }),
-      });
-    }
+    const entry = pool[i % pool.length];
+    const num = i + 1;
+    const path = `/vl/${randomToken(12)}?ed=2560`;
+    const params = [
+      "encryption=none",
+      "security=tls",
+      `sni=${domain}`,
+      "fp=chrome",
+      "alpn=http%2F1.1",
+      "type=ws",
+      `host=${domain}`,
+      `path=${encodeURIComponent(path)}`,
+    ].join("&");
+    const name = `${brand} NUM.${num}`;
+    const link = `vless://${uuid}@${entry}:443?${params}#${encodeURIComponent(name)}`;
+    out.push({ id: `${entry}-${num}-${randomToken(6)}`, index: num, entry, name, link });
   }
   return out;
 }
 
-export interface VerifiedPair {
-  address: string;
-  port: number;
-  ms: number;
-}
-
-export interface PairGenOptions {
-  uuid: string;
-  trojanPassword: string;
-  protocolMode: ProtocolMode;
-  domain: string;
-  path: string;
-  prefix: string;
-  count: number;
-  pairs: VerifiedPair[];
-}
-
-/** Generate configs exclusively from verified (address, port) pairs — TLS only. */
-export function generateFromPairs(opts: PairGenOptions): GenConfig[] {
-  const { uuid, trojanPassword, protocolMode, domain, path, prefix, count, pairs } = opts;
-  const host = sanitizeDomain(domain);
-  const cleanPath = sanitizePath(path);
-  const shuffled = [...pairs].sort(() => Math.random() - 0.5);
-  const out: GenConfig[] = [];
-
-  for (let i = 0; i < count; i++) {
-    const pair = shuffled[i % shuffled.length]!;
-    const protocol: Protocol =
-      protocolMode === "mix" ? (Math.random() < 0.5 ? "vless" : "trojan") : protocolMode;
-    const tag = protocol === "trojan" ? "TR" : "VL";
-    const name = `${prefix}-${tag}-${String(i + 1).padStart(3, "0")}`;
-    const base = {
-      id: `${i}-${Math.random().toString(36).slice(2, 8)}`,
-      name,
-      address: pair.address,
-      port: pair.port,
-      tls: true,
-      protocol,
-      ms: pair.ms,
-    };
-    out.push(
-      protocol === "trojan"
-        ? {
-            ...base,
-            uri: buildTrojanLink({
-              password: trojanPassword.trim(),
-              address: pair.address,
-              port: pair.port,
-              host,
-              path: cleanPath,
-              name,
-            }),
-          }
-        : {
-            ...base,
-            uri: buildVlessLink({
-              uuid,
-              address: pair.address,
-              port: pair.port,
-              host,
-              path: cleanPath,
-              name,
-              tls: true,
-            }),
-          }
-    );
-  }
-  return out;
-}
-
-export function toBase64(s: string): string {
-  return btoa(unescape(encodeURIComponent(s)));
-}
-
-export function faNum(n: number | string): string {
-  return String(n).replace(/\d/g, (d) => "۰۱۲۳۴۵۶۷۸۹"[Number(d)]);
-}
-
-export function downloadText(filename: string, text: string) {
-  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 4000);
+// تبدیل ارقام به فارسی برای نمایش
+export function toFaDigits(value: string | number): string {
+  const fa = "۰۱۲۳۴۵۶۷۸۹";
+  return String(value).replace(/\d/g, (d) => fa[Number(d)]);
 }

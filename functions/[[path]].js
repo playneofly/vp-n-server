@@ -1,485 +1,489 @@
-// ═══════════════════════════════════════════════════════════════════
-//  CF Forge — VLESS + Trojan over WebSocket edge proxy
-//  (Cloudflare Pages Function — auto-detected, no extra setup required)
+// ============================================================
+//  CF Forge — VLESS WebSocket Engine (Cloudflare Pages Functions)
+//  مسیر فایل: functions/[[path]].js  ← دقیقاً همین نام، در ریشه‌ی مخزن
 //
-//  Environment variables (Pages → Settings → Environment variables):
-//    UUID            → key for VLESS configs
-//    TROJAN_PASSWORD → key for Trojan configs
-//    PROXYIP         → optional fallback relay (host or host:port)
-// ═══════════════════════════════════════════════════════════════════
+//  این فایل «سرور واقعی» VLESS است. لینک vless:// فقط یک آدرس است؛
+//  چیزی که باعث می‌شود کانفیگ واقعاً وصل شود، همین موتور است که
+//  کلادفلر به‌صورت خودکار روی Pages دپلوی می‌کند.
+//
+//  نکته: پوشه‌ی functions باید در «ریشه‌ی مخزن» باشد نه داخل dist.
+// ============================================================
 
 import { connect } from "cloudflare:sockets";
 
+// اگر متغیر محیطی UUID ست نشود، این کلید استفاده می‌شود.
+// بهترین کار: در Pages > Settings > Environment Variables مقدار UUID
+// خودت را بگذار و بعد Retry deployment بزن.
 const DEFAULT_UUID = "b3311f0d-72e4-4f9c-9a3d-5c6b7a8f9e0d";
-const DEFAULT_TROJAN_PASSWORD = "ForgeTrojan9217";
 
-const TLS_PORTS = [443, 8443, 2053, 2083, 2087, 2096];
-const SUB_ADDRESSES = [
-  "www.speedtest.net",
-  "icook.tw",
-  "ts.hpc.tw",
-  "cdn.jsdelivr.net",
-  "cdnjs.cloudflare.com",
-  "cloudflare.com",
-  "1.1.1.1",
-  "1.0.0.1",
-  "188.114.96.7",
+// --- ورودی‌های ثابت و تمیز کلادفلر (هیچ اسکنی انجام نمی‌شود) ---
+// همه در رنج‌های رسمی Anycast کلادفلرند؛ SNI/Host مسیر نهایی را تعیین می‌کند.
+const CLEAN_IPS = [
+  "172.67.136.197",
+  "172.64.32.22",
+  "172.67.73.163",
+  "172.64.155.209",
+  "172.67.182.145",
+  "172.64.198.43",
+  "104.16.210.110",
+  "104.17.148.22",
+  "104.18.32.47",
+  "104.19.58.91",
+  "104.20.26.231",
+  "104.21.41.186",
+  "104.22.5.140",
+  "104.24.101.62",
+  "104.25.152.30",
+  "104.26.13.173",
+  "104.27.200.88",
+  "188.114.96.3",
   "188.114.97.3",
+  "162.159.135.42",
+  "162.159.44.51",
+  "198.41.191.227",
+  "190.93.244.18",
+  "141.101.113.140",
+  "108.162.196.77",
+  "173.245.52.90",
+  "103.21.244.15",
+  "103.22.201.133",
+  "103.31.5.77",
+  "131.0.72.55",
+  "www.speedtest.net",
+  "www.cloudflare.com",
 ];
 
+const SUB_BRAND = "CF.FORGE";
+const WS_READY_STATE_OPEN = 1;
+const WS_READY_STATE_CLOSING = 2;
+
+// ------------------------------------------------------------
+//  ورودی اصلی Pages Function
+// ------------------------------------------------------------
 export async function onRequest(context) {
   const { request, env } = context;
-  const userID = String(env.UUID || DEFAULT_UUID).toLowerCase();
-  const trojanPassword = String(env.TROJAN_PASSWORD || DEFAULT_TROJAN_PASSWORD);
-  const upgrade = String(request.headers.get("Upgrade") || "").toLowerCase();
+  try {
+    const url = new URL(request.url);
 
-  // ── WebSocket traffic = proxy (VLESS or Trojan) ────────────────────
-  if (upgrade === "websocket") {
-    const secrets = { userID, trojanSha: sha224hex(trojanPassword) };
-    return handleWS(request, secrets, String(env.PROXYIP || ""));
+    // لینک اشتراک: /sub/YOUR-UUID
+    if (url.pathname.startsWith("/sub/")) {
+      return subscriptionResponse(url, env);
+    }
+
+    const upgradeHeader = (request.headers.get("Upgrade") || "").toLowerCase();
+    if (upgradeHeader !== "websocket") {
+      // درخواست‌های عادی (غیر پروکسی) → هدایت به یک سایت بی‌خطر
+      return Response.redirect("https://www.speedtest.net", 302);
+    }
+
+    return await handleVlessWebSocket(request, env);
+  } catch (err) {
+    return new Response(String((err && err.message) || err), { status: 500 });
   }
-
-  const url = new URL(request.url);
-
-  // ── Health check: /health?uuid=&tpass= → verifies keys remotely ────
-  if (url.pathname === "/health") {
-    const qUuid = String(url.searchParams.get("uuid") || "").toLowerCase();
-    const qPass = String(url.searchParams.get("tpass") || "");
-    return new Response(
-      JSON.stringify({
-        ok: true,
-        engine: "cf-forge/2",
-        uuidMatch: qUuid ? qUuid === userID : null,
-        trojanMatch: qPass ? sha224hex(qPass) === sha224hex(trojanPassword) : null,
-      }),
-      {
-        headers: {
-          "content-type": "application/json; charset=utf-8",
-          "cache-control": "no-store",
-          "access-control-allow-origin": "*",
-        },
-      }
-    );
-  }
-
-  // ── Subscription endpoint: mixed VLESS + Trojan ────────────────────
-  if (url.pathname === `/sub/${userID}`) {
-    return subscriptionResponse(url, userID, trojanPassword);
-  }
-
-  // ── Everything else → the static website ───────────────────────────
-  if (env.ASSETS) {
-    return env.ASSETS.fetch(request);
-  }
-  return infoResponse(url, userID);
 }
 
-// ────────────────────────────────────────────────────────────────────
-//  WebSocket proxy core (protocol-agnostic relay)
-// ────────────────────────────────────────────────────────────────────
+// ------------------------------------------------------------
+//  ساخت لینک اشتراک (Base64 لیست کانفیگ‌ها)
+// ------------------------------------------------------------
+function subscriptionResponse(url, env) {
+  const serverUUID = normalizeUUID(env.UUID || DEFAULT_UUID);
+  const requested = (url.pathname.replace(/^\/sub\/?/, "").split("/")[0] || "").toLowerCase();
+  if (requested !== serverUUID) {
+    return new Response("Not Found", { status: 404 });
+  }
+  const host = url.host;
+  const links = CLEAN_IPS.map((ip, i) => buildVlessLink(serverUUID, ip, host, i + 1)).join("\n");
+  return new Response(btoa(links), {
+    headers: {
+      "content-type": "text/plain; charset=utf-8",
+      "cache-control": "no-store",
+      "profile-update-interval": "12",
+    },
+  });
+}
 
-async function handleWS(request, secrets, proxyIP) {
+function buildVlessLink(uuid, entry, host, num) {
+  const path = encodeURIComponent("/vl/forge?ed=2560");
+  const params =
+    "encryption=none&security=tls&sni=" +
+    host +
+    "&fp=chrome&alpn=http%2F1.1&type=ws&host=" +
+    host +
+    "&path=" +
+    path;
+  const name = encodeURIComponent(SUB_BRAND + " NUM." + num);
+  return "vless://" + uuid + "@" + entry + ":443?" + params + "#" + name;
+}
+
+// ------------------------------------------------------------
+//  هندلر VLESS روی WebSocket
+// ------------------------------------------------------------
+async function handleVlessWebSocket(request, env) {
+  const serverUUID = normalizeUUID(env.UUID || DEFAULT_UUID);
+  const proxyIP = (env.PROXYIP || "").trim();
+
   const pair = new WebSocketPair();
-  const [client, server] = Object.values(pair);
-  server.accept();
+  const [clientWS, serverWS] = Object.values(pair);
+  serverWS.accept();
 
-  const earlyHeader = request.headers.get("sec-websocket-protocol") || "";
-  const wsStream = makeReadableWSStream(server, earlyHeader);
+  // Early-Data (ed=2560): اولین پکت داخل هدر handshake می‌آید
+  const earlyDataHeader = request.headers.get("sec-websocket-protocol") || "";
+  const readableStream = makeReadableWebSocketStream(serverWS, earlyDataHeader);
 
-  let remoteWriter = null;
+  const remoteTransport = { value: null };
+  let udpStreamWrite = null;
+  let isDns = false;
 
-  wsStream
+  readableStream
     .pipeTo(
       new WritableStream({
         async write(chunk) {
-          const u8 = toU8(chunk);
-          if (remoteWriter) {
-            await remoteWriter.write(u8);
+          if (isDns) {
+            return udpStreamWrite && udpStreamWrite(chunk);
+          }
+          if (remoteTransport.value) {
+            const writer = remoteTransport.value.writable.getWriter();
+            await writer.write(chunk);
+            writer.releaseLock();
             return;
           }
-          // First frame → detect & parse protocol (VLESS or Trojan)
-          const parsed = parseAnyHeader(u8, secrets);
-          if (parsed.error) throw new Error(parsed.error);
 
-          const socket = await connectRemote(parsed.address, parsed.port, proxyIP);
-          remoteWriter = socket.writable.getWriter();
-
-          // VLESS requires a 2-byte response header; Trojan sends payload directly
-          if (parsed.respHeader) safeSend(server, parsed.respHeader);
-          if (parsed.raw.byteLength > 0) {
-            await remoteWriter.write(parsed.raw);
+          const parsed = parseVlessHeader(chunk, serverUUID);
+          if (parsed.hasError) {
+            throw new Error(parsed.message);
           }
-          pumpRemoteToWS(socket, server);
+
+          // هدر پاسخ VLESS: [version, 0]
+          const responseHeader = new Uint8Array([parsed.vlessVersion[0], 0]);
+          const rawClientData = chunk.slice(parsed.rawDataIndex);
+
+          if (parsed.isUDP) {
+            if (parsed.portRemote !== 53) {
+              throw new Error("UDP proxy only supports DNS on port 53");
+            }
+            isDns = true;
+            udpStreamWrite = handleUdpOutBound(serverWS, responseHeader);
+            return udpStreamWrite && udpStreamWrite(rawClientData);
+          }
+
+          handleTCPOutBound(
+            remoteTransport,
+            parsed.addressRemote,
+            parsed.portRemote,
+            rawClientData,
+            serverWS,
+            responseHeader,
+            proxyIP
+          );
         },
         close() {
-          try {
-            remoteWriter && remoteWriter.close();
-          } catch {}
+          closeSocket(remoteTransport.value);
+          safeCloseWebSocket(serverWS);
         },
         abort() {
-          try {
-            remoteWriter && remoteWriter.close();
-          } catch {}
+          closeSocket(remoteTransport.value);
+          safeCloseWebSocket(serverWS);
         },
       })
     )
     .catch(() => {
-      safeCloseWS(server);
-      try {
-        remoteWriter && remoteWriter.close();
-      } catch {}
+      closeSocket(remoteTransport.value);
+      safeCloseWebSocket(serverWS);
     });
 
-  return new Response(null, { status: 101, webSocket: client });
+  return new Response(null, { status: 101, webSocket: clientWS });
 }
 
-function makeReadableWSStream(ws, earlyHeader) {
-  let cancelled = false;
+// ------------------------------------------------------------
+//  تبدیل WebSocket به ReadableStream (+ پشتیبانی Early-Data)
+// ------------------------------------------------------------
+function makeReadableWebSocketStream(webSocketServer, earlyDataHeader) {
+  let streamCancelled = false;
   return new ReadableStream({
     start(controller) {
-      ws.addEventListener("message", (event) => {
-        if (!cancelled) controller.enqueue(event.data);
+      webSocketServer.addEventListener("message", (event) => {
+        if (!streamCancelled) controller.enqueue(event.data);
       });
-      ws.addEventListener("close", () => {
-        if (!cancelled) {
+      webSocketServer.addEventListener("close", () => {
+        if (!streamCancelled) {
           try {
             controller.close();
-          } catch {}
+          } catch (e) {}
         }
       });
-      ws.addEventListener("error", (err) => {
-        try {
-          controller.error(err);
-        } catch {}
-      });
-      const { data, error } = base64ToBytes(earlyHeader);
-      if (error) {
-        try {
-          controller.error(error);
-        } catch {}
-      } else if (data && data.byteLength) {
-        controller.enqueue(data);
-      }
+      webSocketServer.addEventListener("error", (err) => controller.error(err));
+
+      const { earlyData, error } = base64ToArrayBuffer(earlyDataHeader);
+      if (error) controller.error(error);
+      else if (earlyData) controller.enqueue(earlyData);
     },
-    cancel() {
-      cancelled = true;
-      safeCloseWS(ws);
+    cancel(reason) {
+      streamCancelled = true;
+      if (reason) console.log("stream cancelled:", reason);
+      safeCloseWebSocket(webSocketServer);
     },
   });
 }
 
-function pumpRemoteToWS(socket, ws) {
-  socket.readable
-    .pipeTo(
-      new WritableStream({
-        write(chunk) {
-          safeSend(ws, chunk);
-        },
-        close() {
-          safeCloseWS(ws);
-        },
-        abort() {
-          safeCloseWS(ws);
-        },
-      })
-    )
-    .catch(() => safeCloseWS(ws));
+function base64ToArrayBuffer(base64Str) {
+  if (!base64Str) return { earlyData: null, error: null };
+  try {
+    const normalized = base64Str.replace(/-/g, "+").replace(/_/g, "/");
+    const binary = atob(normalized);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return { earlyData: bytes.buffer, error: null };
+  } catch (error) {
+    return { earlyData: null, error };
+  }
 }
 
-async function connectRemote(address, port, proxyIP) {
-  const attempts = [{ host: address, port }];
-  if (proxyIP) {
-    const [h, p] = proxyIP.split(":");
-    if (h) attempts.push({ host: h.trim(), port: p ? Number(p) : port });
+// ------------------------------------------------------------
+//  پارس هدر پروتکل VLESS
+// ------------------------------------------------------------
+function parseVlessHeader(vlessBuffer, serverUUID) {
+  if (!vlessBuffer || vlessBuffer.byteLength < 24) {
+    return { hasError: true, message: "invalid header: too short" };
   }
-  let lastErr = null;
-  for (const t of attempts) {
-    try {
-      const socket = connect({ hostname: t.host, port: t.port }, { allowHalfOpen: false });
-      socket.closed.catch(() => {});
-      await socket.opened;
-      return socket;
-    } catch (e) {
-      lastErr = e;
-    }
+  const view = new DataView(vlessBuffer);
+  const version = new Uint8Array(vlessBuffer.slice(0, 1));
+  const uuidBytes = new Uint8Array(vlessBuffer.slice(1, 17));
+
+  if (stringifyUUID(uuidBytes) !== serverUUID) {
+    return { hasError: true, message: "invalid user: uuid mismatch" };
   }
-  throw lastErr || new Error("connect failed");
-}
 
-// ────────────────────────────────────────────────────────────────────
-//  Protocol detection & parsing
-// ────────────────────────────────────────────────────────────────────
-
-function parseAnyHeader(u8, secrets) {
-  // Trojan frames start with 56 hex chars (SHA-224 of password) + CRLF
-  if (
-    u8.byteLength >= 62 &&
-    u8[56] === 0x0d &&
-    u8[57] === 0x0a &&
-    isHexBytes(u8, 0, 56)
-  ) {
-    return parseTrojanHeader(u8, secrets.trojanSha);
+  const optLength = view.getUint8(17);
+  const commandIndex = 18 + optLength;
+  if (commandIndex + 4 > vlessBuffer.byteLength) {
+    return { hasError: true, message: "invalid header: truncated" };
   }
-  return parseVlessHeader(u8, secrets.userID);
-}
+  const command = view.getUint8(commandIndex);
 
-function isHexBytes(u8, start, end) {
-  for (let i = start; i < end; i++) {
-    const c = u8[i];
-    const ok = (c >= 48 && c <= 57) || (c >= 97 && c <= 102) || (c >= 65 && c <= 70);
-    if (!ok) return false;
-  }
-  return true;
-}
-
-// VLESS: ver(1) uuid(16) addonsLen(1) addons(n) cmd(1) port(2) atyp(1) addr payload
-function parseVlessHeader(u8, userID) {
-  if (!u8 || u8.byteLength < 24) return { error: "short header" };
-  const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
-
-  const uuid = bytesToUUID(u8.subarray(1, 17));
-  if (uuid !== userID) return { error: "invalid user" };
-
-  const addonsLen = dv.getUint8(17);
-  const cmdOffset = 18 + addonsLen;
-  if (cmdOffset + 4 > u8.byteLength) return { error: "short command" };
-
-  const command = dv.getUint8(cmdOffset);
-  if (command !== 1) return { error: "only tcp supported" };
-
-  const port = dv.getUint16(cmdOffset + 1);
-  const atyp = dv.getUint8(cmdOffset + 3);
-  let offset = cmdOffset + 4;
-  let address = "";
-  let addrLen = 0;
-
-  if (atyp === 1) {
-    address = u8.subarray(offset, offset + 4).join(".");
-    addrLen = 4;
-  } else if (atyp === 2) {
-    const len = dv.getUint8(offset);
-    address = new TextDecoder().decode(u8.subarray(offset + 1, offset + 1 + len));
-    addrLen = len + 1;
-  } else if (atyp === 3) {
-    const hex = [];
-    for (let i = 0; i < 16; i += 2) hex.push(dv.getUint16(offset + i).toString(16));
-    address = hex.join(":");
-    addrLen = 16;
+  let isUDP = false;
+  if (command === 1) {
+    isUDP = false; // TCP
+  } else if (command === 2) {
+    isUDP = true; // UDP
   } else {
-    return { error: "bad atyp" };
+    return { hasError: true, message: "unsupported command: " + command };
+  }
+
+  const portRemote = view.getUint16(commandIndex + 1);
+  const addressType = view.getUint8(commandIndex + 3);
+  let addressIndex = commandIndex + 4;
+  let addressRemote = "";
+
+  if (addressType === 1) {
+    // IPv4
+    if (addressIndex + 4 > vlessBuffer.byteLength) return { hasError: true, message: "bad ipv4" };
+    addressRemote = new Uint8Array(vlessBuffer.slice(addressIndex, addressIndex + 4)).join(".");
+    addressIndex += 4;
+  } else if (addressType === 2) {
+    // دامنه
+    const len = view.getUint8(addressIndex);
+    addressIndex += 1;
+    if (addressIndex + len > vlessBuffer.byteLength) return { hasError: true, message: "bad domain" };
+    addressRemote = new TextDecoder().decode(vlessBuffer.slice(addressIndex, addressIndex + len));
+    addressIndex += len;
+  } else if (addressType === 3) {
+    // IPv6
+    if (addressIndex + 16 > vlessBuffer.byteLength) return { hasError: true, message: "bad ipv6" };
+    const dv = new DataView(vlessBuffer.slice(addressIndex, addressIndex + 16));
+    const groups = [];
+    for (let i = 0; i < 8; i++) groups.push(dv.getUint16(i * 2).toString(16));
+    addressRemote = groups.join(":");
+    addressIndex += 16;
+  } else {
+    return { hasError: true, message: "invalid addressType: " + addressType };
   }
 
   return {
-    proto: "vless",
-    address,
-    port,
-    raw: u8.subarray(offset + addrLen),
-    respHeader: new Uint8Array([0, 0]),
+    hasError: false,
+    addressRemote,
+    portRemote,
+    rawDataIndex: addressIndex,
+    vlessVersion: version,
+    isUDP,
   };
 }
 
-// Trojan: sha224hex(56 ascii) CRLF cmd(1) atyp(1) addr port(2) CRLF payload
-// atyp: 1=IPv4, 3=Domain, 4=IPv6
-function parseTrojanHeader(u8, expectedSha) {
-  const clientSha = new TextDecoder().decode(u8.subarray(0, 56)).toLowerCase();
-  if (clientSha !== expectedSha) return { error: "bad trojan password" };
-
-  const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
-  const command = dv.getUint8(58);
-  if (command !== 1) return { error: "only tcp supported" };
-
-  const atyp = dv.getUint8(59);
-  let offset = 60;
-  let address = "";
-  let addrLen = 0;
-
-  if (atyp === 1) {
-    address = u8.subarray(offset, offset + 4).join(".");
-    addrLen = 4;
-  } else if (atyp === 3) {
-    const len = dv.getUint8(offset);
-    address = new TextDecoder().decode(u8.subarray(offset + 1, offset + 1 + len));
-    addrLen = len + 1;
-  } else if (atyp === 4) {
-    const hex = [];
-    for (let i = 0; i < 16; i += 2) hex.push(dv.getUint16(offset + i).toString(16));
-    address = hex.join(":");
-    addrLen = 16;
-  } else {
-    return { error: "bad atyp" };
+// ------------------------------------------------------------
+//  پل‌زدن TCP به مقصد (با پشتیبان PROXYIP برای مقاومت در برابر قطعی)
+// ------------------------------------------------------------
+async function handleTCPOutBound(
+  remoteTransport,
+  addressRemote,
+  portRemote,
+  rawClientData,
+  webSocket,
+  responseHeader,
+  proxyIP
+) {
+  async function connectAndWrite(address, port) {
+    const tcpSocket = connect({ hostname: address, port: port });
+    remoteTransport.value = tcpSocket;
+    const writer = tcpSocket.writable.getWriter();
+    await writer.write(rawClientData);
+    writer.releaseLock();
+    return tcpSocket;
   }
 
-  const port = dv.getUint16(offset + addrLen);
-  const raw = u8.subarray(offset + addrLen + 2 + 2); // skip port + CRLF
-
-  return { proto: "trojan", address, port, raw, respHeader: null };
-}
-
-function bytesToUUID(b) {
-  let hex = "";
-  for (let i = 0; i < b.length; i++) hex += b[i].toString(16).padStart(2, "0");
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-}
-
-// ────────────────────────────────────────────────────────────────────
-//  SHA-224 (pure JS — WebCrypto does not provide it)
-// ────────────────────────────────────────────────────────────────────
-
-function sha224hex(text) {
-  const K = [
-    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
-  ];
-  const H = [0xc1059ed8, 0x367cd507, 0x3070dd17, 0xf70e5939, 0xffc00b31, 0x68581511, 0x64f98fa7, 0xbefa4fa4].map((x) => x | 0);
-  const rr = (x, n) => ((x >>> n) | (x << (32 - n))) | 0;
-
-  const msg = new TextEncoder().encode(text);
-  const totalLen = Math.ceil((msg.length + 9) / 64) * 64;
-  const padded = new Uint8Array(totalLen);
-  padded.set(msg);
-  padded[msg.length] = 0x80;
-  const dv = new DataView(padded.buffer);
-  dv.setUint32(totalLen - 4, (msg.length * 8) >>> 0);
-
-  const W = new Int32Array(64);
-  for (let block = 0; block < totalLen; block += 64) {
-    for (let t = 0; t < 16; t++) W[t] = dv.getInt32(block + t * 4);
-    for (let t = 16; t < 64; t++) {
-      const s0 = (rr(W[t - 15], 7) ^ rr(W[t - 15], 18) ^ (W[t - 15] >>> 3)) | 0;
-      const s1 = (rr(W[t - 2], 17) ^ rr(W[t - 2], 19) ^ (W[t - 2] >>> 10)) | 0;
-      W[t] = (W[t - 16] + s0 + W[t - 7] + s1) | 0;
+  async function retryWithProxyIP() {
+    if (!proxyIP) return safeCloseWebSocket(webSocket);
+    const colonIndex = proxyIP.lastIndexOf(":");
+    const host = colonIndex > 0 ? proxyIP.slice(0, colonIndex) : proxyIP;
+    const port = colonIndex > 0 ? Number(proxyIP.slice(colonIndex + 1)) || 443 : 443;
+    try {
+      const tcpSocket = await connectAndWrite(host, port);
+      await remoteSocketToWS(tcpSocket, webSocket, null, null);
+    } catch (e) {
+      safeCloseWebSocket(webSocket);
     }
-    let [a, b, c, d, e, f, g, h] = H;
-    for (let t = 0; t < 64; t++) {
-      const S1 = (rr(e, 6) ^ rr(e, 11) ^ rr(e, 25)) | 0;
-      const ch = ((e & f) ^ (~e & g)) | 0;
-      const t1 = (h + S1 + ch + K[t] + W[t]) | 0;
-      const S0 = (rr(a, 2) ^ rr(a, 13) ^ rr(a, 22)) | 0;
-      const maj = ((a & b) ^ (a & c) ^ (b & c)) | 0;
-      const t2 = (S0 + maj) | 0;
-      h = g; g = f; f = e; e = (d + t1) | 0;
-      d = c; c = b; b = a; a = (t1 + t2) | 0;
-    }
-    H[0] = (H[0] + a) | 0; H[1] = (H[1] + b) | 0; H[2] = (H[2] + c) | 0; H[3] = (H[3] + d) | 0;
-    H[4] = (H[4] + e) | 0; H[5] = (H[5] + f) | 0; H[6] = (H[6] + g) | 0; H[7] = (H[7] + h) | 0;
   }
-  let out = "";
-  for (let i = 0; i < 7; i++) out += (H[i] >>> 0).toString(16).padStart(8, "0");
-  return out; // 56 hex chars
-}
 
-// ────────────────────────────────────────────────────────────────────
-//  Subscription (mixed VLESS + Trojan) + info page
-// ────────────────────────────────────────────────────────────────────
-
-function buildVlessLink({ uuid, address, host, port, name }) {
-  const q = new URLSearchParams({
-    encryption: "none",
-    security: "tls",
-    sni: host,
-    fp: "randomized",
-    alpn: "http/1.1",
-    type: "ws",
-    host,
-    path: "/",
-  });
-  return `vless://${uuid}@${address}:${port}?${q.toString()}#${encodeURIComponent(name)}`;
-}
-
-function buildTrojanLink({ password, address, host, port, name }) {
-  const q = new URLSearchParams({
-    security: "tls",
-    sni: host,
-    fp: "randomized",
-    alpn: "http/1.1",
-    type: "ws",
-    host,
-    path: "/",
-  });
-  return `trojan://${encodeURIComponent(password)}@${address}:${port}?${q.toString()}#${encodeURIComponent(name)}`;
-}
-
-function subscriptionResponse(url, userID, trojanPassword) {
-  const host = url.host;
-  const prefix = (url.searchParams.get("name") || "CF-Forge").slice(0, 24);
-  const links = [];
-  const addrs = shuffle([...SUB_ADDRESSES]);
-  for (let i = 0; i < TLS_PORTS.length; i++) {
-    const port = TLS_PORTS[i];
-    const a1 = addrs[(i * 2) % addrs.length];
-    const a2 = addrs[(i * 2 + 1) % addrs.length];
-    links.push(buildVlessLink({ uuid: userID, address: a1, host, port, name: `${prefix}-VL-${String(i + 1).padStart(2, "0")}` }));
-    links.push(buildTrojanLink({ password: trojanPassword, address: a2, host, port, name: `${prefix}-TR-${String(i + 1).padStart(2, "0")}` }));
+  try {
+    const tcpSocket = await connectAndWrite(addressRemote, portRemote);
+    await remoteSocketToWS(tcpSocket, webSocket, responseHeader, proxyIP ? retryWithProxyIP : null);
+  } catch (e) {
+    if (proxyIP) await retryWithProxyIP();
+    else safeCloseWebSocket(webSocket);
   }
-  const body = utf8ToBase64(links.join("\n"));
-  return new Response(body, {
-    headers: {
-      "content-type": "text/plain; charset=utf-8",
-      "cache-control": "no-store",
-      "profile-title": utf8ToBase64("CF Forge"),
-      "profile-update-interval": "12",
-      "access-control-allow-origin": "*",
+}
+
+// جریان سوکت ریموت → WebSocket کلاینت (هدر VLESS فقط روی اولین پکت)
+async function remoteSocketToWS(remoteSocket, webSocket, responseHeader, retry) {
+  let hasIncomingData = false;
+  let headerSent = responseHeader === null;
+  try {
+    await remoteSocket.readable.pipeTo(
+      new WritableStream({
+        write(chunk) {
+          hasIncomingData = true;
+          if (!headerSent) {
+            const merged = new Uint8Array(responseHeader.byteLength + chunk.byteLength);
+            merged.set(responseHeader, 0);
+            merged.set(chunk, responseHeader.byteLength);
+            chunk = merged;
+            headerSent = true;
+          }
+          if (webSocket.readyState === WS_READY_STATE_OPEN) {
+            webSocket.send(chunk);
+          }
+        },
+        close() {},
+        abort() {},
+      })
+    );
+  } catch (e) {
+    // اتصال ریموت قطع شد
+  }
+  // اگر مقصد مستقیم هیچ دیتایی نداد، از مسیر پشتیبان تلاش دوباره
+  if (!hasIncomingData && retry) {
+    await retry();
+    return;
+  }
+  safeCloseWebSocket(webSocket);
+}
+
+// ------------------------------------------------------------
+//  UDP (فقط DNS پورت 53 از طریق DoH)
+// ------------------------------------------------------------
+function handleUdpOutBound(webSocket, responseHeader) {
+  let vlessHeaderSent = false;
+  const transformStream = new TransformStream({
+    transform(chunk, controller) {
+      const view = new DataView(chunk);
+      for (let index = 0; index < chunk.byteLength; ) {
+        const length = view.getUint16(index);
+        const udpData = chunk.slice(index + 2, index + 2 + length);
+        index += 2 + length;
+        controller.enqueue(udpData);
+      }
     },
   });
+
+  transformStream.readable
+    .pipeTo(
+      new WritableStream({
+        async write(chunk) {
+          try {
+            const resp = await fetch("https://dns.google/dns-query", {
+              method: "POST",
+              headers: { "content-type": "application/dns-message" },
+              body: chunk,
+            });
+            const dnsResult = await resp.arrayBuffer();
+            const udpSize = dnsResult.byteLength;
+            const sizeBuffer = new Uint8Array([(udpSize >> 8) & 0xff, udpSize & 0xff]);
+            let out;
+            if (vlessHeaderSent) {
+              out = concatBytes(sizeBuffer, new Uint8Array(dnsResult));
+            } else {
+              out = concatBytes(responseHeader, sizeBuffer, new Uint8Array(dnsResult));
+              vlessHeaderSent = true;
+            }
+            if (webSocket.readyState === WS_READY_STATE_OPEN) {
+              webSocket.send(out);
+            }
+          } catch (e) {}
+        },
+      })
+    )
+    .catch(() => {});
+
+  const writer = transformStream.writable.getWriter();
+  return async function (chunk) {
+    try {
+      await writer.write(chunk);
+    } catch (e) {}
+  };
 }
 
-function infoResponse(url, userID) {
-  const html = `<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CF Forge Proxy</title>
-<style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#07080d;color:#eef1f8;font-family:Tahoma,sans-serif}div{max-width:520px;padding:32px;text-align:center}h1{font-size:20px;margin:0 0 12px}p{color:#9aa3b5;font-size:13px;line-height:2}code{background:#f6821f22;color:#fdad01;padding:3px 10px;border-radius:8px;font-family:monospace;direction:ltr;display:inline-block;margin-top:6px}</style></head>
-<body><div><h1>⚡ موتور پروکسی فعال است</h1><p>VLESS + Trojan روی کلادفلر در حال اجراست.<br>لینک اشتراک شما:</p><code>${url.origin}/sub/${userID}</code></div></body></html>`;
-  return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } });
-}
-
-// ────────────────────────────────────────────────────────────────────
-//  tiny utils
-// ────────────────────────────────────────────────────────────────────
-
-function toU8(chunk) {
-  if (chunk instanceof Uint8Array) return chunk;
-  if (chunk instanceof ArrayBuffer) return new Uint8Array(chunk);
-  if (ArrayBuffer.isView(chunk)) return new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength);
-  return new TextEncoder().encode(String(chunk));
-}
-
-function base64ToBytes(b64) {
-  if (!b64) return { data: null };
-  try {
-    const std = b64.replace(/-/g, "+").replace(/_/g, "/");
-    const bin = atob(std);
-    const out = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-    return { data: out };
-  } catch (error) {
-    return { error };
+function concatBytes() {
+  const arrays = Array.from(arguments);
+  const total = arrays.reduce((sum, a) => sum + a.byteLength, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const a of arrays) {
+    out.set(new Uint8Array(a.buffer || a, a.byteOffset || 0, a.byteLength), offset);
+    offset += a.byteLength;
   }
+  return out;
 }
 
-function safeSend(ws, data) {
+// ------------------------------------------------------------
+//  ابزارها
+// ------------------------------------------------------------
+const byteToHex = [];
+for (let i = 0; i < 256; i++) byteToHex[i] = (i + 0x100).toString(16).slice(1);
+
+function stringifyUUID(arr) {
+  return (
+    byteToHex[arr[0]] + byteToHex[arr[1]] + byteToHex[arr[2]] + byteToHex[arr[3]] + "-" +
+    byteToHex[arr[4]] + byteToHex[arr[5]] + "-" +
+    byteToHex[arr[6]] + byteToHex[arr[7]] + "-" +
+    byteToHex[arr[8]] + byteToHex[arr[9]] + "-" +
+    byteToHex[arr[10]] + byteToHex[arr[11]] + byteToHex[arr[12]] + byteToHex[arr[13]] +
+    byteToHex[arr[14]] + byteToHex[arr[15]]
+  ).toLowerCase();
+}
+
+function normalizeUUID(uuid) {
+  return String(uuid || "").trim().toLowerCase();
+}
+
+function safeCloseWebSocket(socket) {
   try {
-    ws.send(data);
-  } catch {}
+    if (socket.readyState === WS_READY_STATE_OPEN || socket.readyState === WS_READY_STATE_CLOSING) {
+      socket.close();
+    }
+  } catch (e) {}
 }
 
-function safeCloseWS(ws) {
+function closeSocket(socket) {
+  if (!socket) return;
   try {
-    ws.close(1000, "done");
-  } catch {}
-}
-
-function shuffle(arr) {
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-  }
-  return arr;
-}
-
-function utf8ToBase64(s) {
-  return btoa(unescape(encodeURIComponent(s)));
+    socket.close();
+  } catch (e) {}
 }
