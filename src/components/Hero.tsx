@@ -48,7 +48,8 @@ export default function Hero() {
 
           <Reveal delay={90}>
             <h1 className="text-[42px] font-black leading-[1.15] tracking-tight text-white sm:text-6xl md:text-[68px]">
-              کانفیگ <span className="text-gradient">VLESS</span> بساز؛
+              کانفیگ <span className="text-gradient">VLESS</span> و{" "}
+              <span className="text-gradient">Trojan</span> بساز؛
               <br />
               نامحدود، واقعی،
               <br />

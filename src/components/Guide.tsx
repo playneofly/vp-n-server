@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import Reveal from "./Reveal";
 import { toast } from "../lib/toast";
-import { DEFAULT_UUID } from "../lib/vless";
+import { DEFAULT_TROJAN_PASSWORD, DEFAULT_UUID } from "../lib/vless";
 
 export default function Guide() {
   return (
@@ -101,17 +101,24 @@ git push -u origin main`}
             <>
               <p>
                 داخل پروژه‌ی Pages برو به <b>Settings</b> ← <b>Environment variables</b> و برای{" "}
-                <b>Production</b> این متغیر را اضافه کن:
+                <b>Production</b> این متغیرها را اضافه کن:
               </p>
-              <SettingsTable rows={[["Variable name", "UUID"], ["Value", "یک UUID تصادفی (از سازنده بالا بردار)"]]} />
+              <SettingsTable
+                rows={[
+                  ["Variable 1", "UUID  →  کلید VLESS"],
+                  ["Variable 2", "TROJAN_PASSWORD  →  کلید Trojan"],
+                  ["Value", "مقادیر سازنده‌ی بالا را کپی کن"],
+                ]}
+              />
               <p className="text-white/40">
                 ⚠️ بعد از ذخیره، حتما از تب <b>Deployments</b> گزینه‌ی <b>Retry deployment</b> /{" "}
-                <b>Create new deployment</b> را بزن تا متغیر اعمال شود. اگر متغیر نگذاری، مقدار پیش‌فرض
+                <b>Create new deployment</b> را بزن تا متغیرها اعمال شوند. اگر متغیر نگذاری، مقادیر پیش‌فرض
                 پروژه استفاده می‌شود:
               </p>
-              <CodeBlock code={DEFAULT_UUID} />
+              <CodeBlock code={`UUID = ${DEFAULT_UUID}\nTROJAN_PASSWORD = ${DEFAULT_TROJAN_PASSWORD}`} />
               <p className="text-white/40">
-                همین UUID را در فیلد «کلید UUID» صفحه‌ی کانفیگ‌ساز وارد کن تا کانفیگ‌ها با سرور هماهنگ باشند.
+                همین کلیدها را در فیلدهای «کلید UUID» و «رمز Trojan» صفحه‌ی کانفیگ‌ساز وارد کن تا
+                کانفیگ‌ها با سرور هماهنگ باشند.
               </p>
             </>
           }

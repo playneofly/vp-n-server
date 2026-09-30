@@ -5,6 +5,7 @@ import {
   Check,
   ClipboardCopy,
   Copy,
+  Dices,
   Download,
   FileDown,
   Globe,
@@ -23,6 +24,7 @@ import {
 import Reveal from "./Reveal";
 import { toast } from "../lib/toast";
 import {
+  DEFAULT_TROJAN_PASSWORD,
   DEFAULT_UUID,
   PLAIN_PORTS,
   TLS_PORTS,
@@ -30,10 +32,12 @@ import {
   faNum,
   generateConfigs,
   isValidUUID,
+  randomPassword,
   randomUUID,
   sanitizeDomain,
   toBase64,
   type GenConfig,
+  type ProtocolMode,
 } from "../lib/vless";
 import { buildPool, CLEAN_DOMAINS, CLEAN_IPS, type IpMode } from "../lib/cleanIPs";
 
@@ -44,6 +48,8 @@ const MAX_COUNT = 2000;
 interface Settings {
   domain: string;
   uuid: string;
+  trojanPassword: string;
+  protocolMode: ProtocolMode;
   tlsPorts: number[];
   plainPorts: number[];
   path: string;
@@ -57,6 +63,8 @@ function loadSettings(): Settings {
   const fallback: Settings = {
     domain: typeof window !== "undefined" ? window.location.host : "",
     uuid: DEFAULT_UUID,
+    trojanPassword: DEFAULT_TROJAN_PASSWORD,
+    protocolMode: "mix",
     tlsPorts: [443],
     plainPorts: [],
     path: "",
@@ -102,10 +110,14 @@ export default function Generator() {
 
   const generate = () => {
     if (!domainOk) return toast("اول دامنه‌ی معتبر سایت/ورکرت را وارد کن", "err");
-    if (!uuidOk) return toast("فرمت UUID معتبر نیست", "err");
+    if (s.protocolMode !== "trojan" && !uuidOk) return toast("فرمت UUID معتبر نیست", "err");
+    if (s.protocolMode !== "vless" && !s.trojanPassword.trim())
+      return toast("رمز Trojan را وارد کن یا حالت را روی VLESS بگذار", "err");
     if (pool.length === 0) return toast("هیچ آی‌پی تمیزی موجود نیست — چندتا آی‌پی سفارشی وارد کن", "err");
     const configs = generateConfigs({
       uuid: s.uuid.trim(),
+      trojanPassword: s.trojanPassword,
+      protocolMode: s.protocolMode,
       domain: s.domain,
       tlsPorts: s.tlsPorts,
       plainPorts: s.plainPorts,
@@ -225,9 +237,72 @@ export default function Generator() {
 
           <Reveal delay={120}>
             <div className="glass rounded-3xl p-6">
-              <StepTitle n="۳" icon={<Hash className="h-4.5 w-4.5" />} title="پورت‌ها و آی‌پی‌ها" />
+              <StepTitle n="۳" icon={<Hash className="h-4.5 w-4.5" />} title="پروتکل، پورت‌ها و آی‌پی‌ها" />
 
               <div className="mt-4">
+                <div className="mb-2 text-[11px] font-bold text-white/50">پروتکل کانفیگ‌ها</div>
+                <div className="glass-soft grid grid-cols-3 gap-1 rounded-2xl p-1">
+                  {(
+                    [
+                      ["mix", "ترکیبی شانسی", <Dices key="m" className="h-3.5 w-3.5" />],
+                      ["vless", "VLESS", null],
+                      ["trojan", "Trojan", null],
+                    ] as [ProtocolMode, string, React.ReactNode][]
+                  ).map(([m, label, icon]) => (
+                    <button
+                      key={m}
+                      data-on={s.protocolMode === m}
+                      onClick={() => set("protocolMode", m)}
+                      className="chip flex items-center justify-center gap-1.5 rounded-xl py-2 text-[11.5px] font-bold text-white/55"
+                    >
+                      {icon}
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                {s.protocolMode === "mix" && (
+                  <p className="mt-2 text-[11px] text-white/35">
+                    هر کانفیگ شانسی VLESS یا Trojan می‌شود — تنوع بیشتر، شناسایی سخت‌تر.
+                  </p>
+                )}
+              </div>
+
+              {s.protocolMode !== "vless" && (
+                <div className="mt-4">
+                  <div className="mb-2 flex items-center gap-1.5 text-[11px] font-bold text-white/50">
+                    <KeyRound className="h-3.5 w-3.5 text-violet-400" /> رمز Trojan
+                  </div>
+                  <div className="glass-soft flex items-center gap-2 rounded-2xl p-1.5" dir="ltr">
+                    <input
+                      value={s.trojanPassword}
+                      onChange={(e) => set("trojanPassword", e.target.value)}
+                      spellCheck={false}
+                      className="num w-full bg-transparent px-3 text-[12.5px] text-white outline-none placeholder:text-white/25"
+                    />
+                    <button
+                      onClick={() => set("trojanPassword", randomPassword())}
+                      title="رمز تصادفی"
+                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-violet-500/90 text-white transition hover:bg-violet-400"
+                    >
+                      <Dices className="h-4 w-4" />
+                    </button>
+                    <button
+                      onClick={() => copyText(s.trojanPassword, "رمز Trojan کپی شد")}
+                      title="کپی"
+                      className="glass-soft flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-white/70 transition hover:text-white"
+                    >
+                      <Copy className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <div className="mt-2.5 flex items-start gap-2 rounded-xl border border-violet-400/25 bg-violet-400/8 p-3 text-[11px] leading-5 text-violet-300/90">
+                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    این رمز باید با متغیر <span className="num font-bold">TROJAN_PASSWORD</span> در
+                    کلادفلر یکی باشد — مثل همان کاری که برای UUID کردی.
+                  </div>
+                </div>
+              )}
+
+              <div className="mt-5">
                 <div className="mb-2 flex items-center gap-1.5 text-[11px] font-bold text-white/50">
                   <Lock className="h-3.5 w-3.5 text-emerald-400" /> پورت‌های TLS (امن — پیش‌نهادی)
                 </div>
@@ -410,9 +485,17 @@ export default function Generator() {
                       <div className="text-base font-extrabold text-white">
                         {faNum(results.length)} کانفیگ آماده
                       </div>
-                      <div className="mt-0.5 text-[11px] text-white/40">
-                        {faNum(new Set(results.map((r) => r.address)).size)} مقصد یکتا ·{" "}
-                        {faNum(new Set(results.map((r) => r.port)).size)} پورت
+                      <div className="mt-0.5 flex items-center gap-2 text-[11px] text-white/40">
+                        <span>
+                          {faNum(new Set(results.map((r) => r.address)).size)} مقصد یکتا ·{" "}
+                          {faNum(new Set(results.map((r) => r.port)).size)} پورت
+                        </span>
+                        <span className="num rounded-full bg-brand-500/12 px-2 py-0.5 text-[10px] font-bold text-brand-300">
+                          {results.filter((r) => r.protocol === "vless").length} VLESS
+                        </span>
+                        <span className="num rounded-full bg-violet-400/12 px-2 py-0.5 text-[10px] font-bold text-violet-300">
+                          {results.filter((r) => r.protocol === "trojan").length} Trojan
+                        </span>
                       </div>
                     </div>
                     <div className="flex gap-2">
@@ -475,6 +558,15 @@ export default function Generator() {
                             {r.address}:{r.port}
                           </div>
                         </div>
+                        <span
+                          className={`num hidden shrink-0 rounded-full px-2 py-1 text-[9.5px] font-black uppercase sm:block ${
+                            r.protocol === "trojan"
+                              ? "bg-violet-400/12 text-violet-300"
+                              : "bg-brand-500/12 text-brand-300"
+                          }`}
+                        >
+                          {r.protocol}
+                        </span>
                         <span
                           className={`flex shrink-0 items-center gap-1 rounded-full px-2 py-1 text-[9.5px] font-black ${
                             r.tls
